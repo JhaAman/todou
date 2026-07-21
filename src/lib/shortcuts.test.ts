@@ -1,0 +1,26 @@
+import { describe, expect, it } from "vitest";
+import { defaultShortcuts, shortcutMatches } from "./shortcuts";
+
+function keyboardEvent(key: string, modifiers: KeyboardEventInit): KeyboardEvent {
+  return new KeyboardEvent("keydown", { key, ...modifiers });
+}
+
+describe("shortcut matching", () => {
+  it("matches defaults regardless of the stored modifier order", () => {
+    expect(shortcutMatches(
+      keyboardEvent("T", { metaKey: true, shiftKey: true }),
+      defaultShortcuts.moveToday,
+    )).toBe(true);
+    expect(shortcutMatches(
+      keyboardEvent("P", { metaKey: true, shiftKey: true }),
+      defaultShortcuts.togglePriority,
+    )).toBe(true);
+  });
+
+  it("does not match when a required modifier is absent", () => {
+    expect(shortcutMatches(
+      keyboardEvent("T", { metaKey: true }),
+      defaultShortcuts.moveToday,
+    )).toBe(false);
+  });
+});
