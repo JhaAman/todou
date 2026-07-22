@@ -1,5 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -37,7 +38,7 @@ afterEach(async () => {
 async function listen(
   respond: (request: Request) => unknown,
 ): Promise<string> {
-  const directory = await mkdtemp(join("/private/tmp", "todou-mcp-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "todou-mcp-test-"));
   const socketPath = join(directory, "todou.sock");
   directories.push(directory);
 
