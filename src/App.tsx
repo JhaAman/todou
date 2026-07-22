@@ -19,7 +19,7 @@ import { TaskInspector } from "./features/tasks/TaskInspector";
 import { TaskSection } from "./features/tasks/TaskSection";
 import { useTaskController } from "./features/tasks/useTaskController";
 import { loadPreferences, savePreferences } from "./lib/preferences";
-import { shortcutMatches } from "./lib/shortcuts";
+import { isInteractiveShortcutTarget, shortcutMatches } from "./lib/shortcuts";
 import { startRealtimeWake } from "./lib/realtimeWake";
 import { emptySyncSettings, toNativeShortcut, type SyncSettings } from "./lib/syncSettings";
 import { isTauriRuntime, taskClient } from "./lib/taskClient";
@@ -194,7 +194,7 @@ export default function App() {
   const saveSyncSettings = useCallback(async (settings: SyncSettings) => {
     await taskClient.setSyncSettings(settings);
     setSyncSettings(settings);
-    showNotice(settings.url ? "Supabase connection saved" : "Supabase connection cleared");
+    showNotice(settings.url ? "Supabase settings saved" : "Supabase settings cleared");
   }, [showNotice]);
 
   const exportTasks = useCallback(async () => {
@@ -247,6 +247,22 @@ export default function App() {
     void controller.reorderTask(movingId, anchors.beforeId, anchors.afterId);
   }, [controller.tasks, controller.reorderTask, showNotice]);
 
+  const dropTaskOnRow = useCallback((movingId: string, targetId: string, edge: "before" | "after") => {
+    const moving = controller.tasks.find(({ id, completedAt, deletedAt }) => id === movingId && !completedAt && !deletedAt);
+    const target = controller.tasks.find(({ id, completedAt, deletedAt }) => id === targetId && !completedAt && !deletedAt);
+    if (!moving || !target) return;
+    if (moving.bucket !== target.bucket) {
+      void controller.moveTask(moving.id, target.bucket);
+      return;
+    }
+    reorderTask(moving.id, target.id, edge);
+  }, [controller.tasks, controller.moveTask, reorderTask]);
+
+  const dropTaskIntoBucket = useCallback((movingId: string, bucket: Bucket) => {
+    const moving = controller.tasks.find(({ id, completedAt, deletedAt }) => id === movingId && !completedAt && !deletedAt);
+    if (moving && moving.bucket !== bucket) void controller.moveTask(moving.id, bucket);
+  }, [controller.tasks, controller.moveTask]);
+
   const togglePriority = useCallback((task: Task) => {
     void controller.updateTask(task.id, { priority: task.priority === "high" ? "low" : "high" });
   }, [controller.updateTask]);
@@ -261,8 +277,8 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const isEditing = target?.matches("input, textarea, [contenteditable='true']") ?? false;
+      const target = event.target instanceof Element ? event.target : null;
+      const isEditing = Boolean(target?.closest("input, select, textarea, [contenteditable]:not([contenteditable='false'])"));
       if (shortcutMatches(event, preferences.shortcuts.commandPalette)) {
         event.preventDefault();
         openPalette("commands");
@@ -274,7 +290,15 @@ export default function App() {
         return;
       }
       if (paletteOpen || isEditing) return;
+      const isUnmodifiedSpace = shortcutMatches(event, "Space");
+      const canUseAmbientSpace = !selectedTask && !isInteractiveShortcutTarget(event.target);
       if (shortcutMatches(event, preferences.shortcuts.newTask)) {
+        if (isUnmodifiedSpace && !canUseAmbientSpace) return;
+        event.preventDefault();
+        openComposer();
+        return;
+      }
+      if (isUnmodifiedSpace && canUseAmbientSpace) {
         event.preventDefault();
         openComposer();
         return;
@@ -338,7 +362,8 @@ export default function App() {
     onMove: (id: string, bucket: Bucket) => void controller.moveTask(id, bucket),
     onTogglePriority: togglePriority,
     onDelete: deleteTask,
-    onReorder: reorderTask,
+    onDropTask: dropTaskOnRow,
+    onDropIntoBucket: dropTaskIntoBucket,
   };
 
   const composer = (bucket: Bucket) => composerBucket === bucket ? (
@@ -363,6 +388,7 @@ export default function App() {
         onNewTask={() => openComposer()}
         onOpenPalette={() => openPalette("commands")}
         onOpenThemes={() => openPalette("themes")}
+        onDropTask={dropTaskIntoBucket}
         todayCount={todayTasks.length}
         inboxCount={inboxTasks.length}
         theme={themeById(previewTheme)}
@@ -388,13 +414,13 @@ export default function App() {
             <div className="loading-list" aria-label="Loading tasks"><span /><span /><span /><span /></div>
           ) : view === "home" ? (
             <>
-              <TaskSection title="Today" tasks={todayTasks} onAdd={() => openComposer("today")} {...sectionProps}>{composer("today")}</TaskSection>
-              <TaskSection title="Inbox" tasks={inboxTasks} onAdd={() => openComposer("inbox")} {...sectionProps}>{composer("inbox")}</TaskSection>
+              <TaskSection title="Today" bucket="today" tasks={todayTasks} onAdd={() => openComposer("today")} {...sectionProps}>{composer("today")}</TaskSection>
+              <TaskSection title="Inbox" bucket="inbox" tasks={inboxTasks} onAdd={() => openComposer("inbox")} {...sectionProps}>{composer("inbox")}</TaskSection>
             </>
           ) : view === "today" ? (
-            <TaskSection title="Today" hideHeader tasks={todayTasks} onAdd={() => openComposer("today")} {...sectionProps}>{composer("today")}</TaskSection>
+            <TaskSection title="Today" bucket="today" hideHeader tasks={todayTasks} onAdd={() => openComposer("today")} {...sectionProps}>{composer("today")}</TaskSection>
           ) : view === "inbox" ? (
-            <TaskSection title="Inbox" hideHeader tasks={inboxTasks} onAdd={() => openComposer("inbox")} {...sectionProps}>{composer("inbox")}</TaskSection>
+            <TaskSection title="Inbox" bucket="inbox" hideHeader tasks={inboxTasks} onAdd={() => openComposer("inbox")} {...sectionProps}>{composer("inbox")}</TaskSection>
           ) : view === "logbook" ? (
             <FlatTaskList
               query={logbookQuery}
@@ -456,8 +482,11 @@ export default function App() {
       <SyncSettingsDialog
         open={settingsOpen}
         settings={syncSettings}
+        runtime={isTauriRuntime() ? "tauri" : "browser"}
         onOpenChange={setSettingsOpen}
         onSave={saveSyncSettings}
+        onTestConnection={taskClient.testSyncConnection}
+        onLoadDiagnostics={taskClient.getSyncDiagnostics}
       />
 
       {controller.undo && (

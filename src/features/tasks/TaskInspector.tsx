@@ -71,16 +71,18 @@ export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onR
         <button className="icon-button" onClick={onClose} aria-label="Close details"><X size={16} /></button>
       </div>
       <div className="inspector-scroll">
-        <div className={`inspector-area-mark area-${task.area}`} />
-        <textarea
-          className="inspector-title"
-          rows={3}
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={saveTitle}
-          onKeyDown={titleKeyDown}
-          aria-label="Task title"
-        />
+        <div className="inspector-title-editor">
+          <div className={`inspector-area-mark area-${task.area}`} aria-hidden="true" />
+          <textarea
+            className="inspector-title"
+            rows={2}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={saveTitle}
+            onKeyDown={titleKeyDown}
+            aria-label="Task title"
+          />
+        </div>
         {task.completedAt && <div className="inspector-status-row"><span className="status-pill complete"><span />Completed</span></div>}
 
         <div className="inspector-divider" />
@@ -126,6 +128,7 @@ export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onR
         <label className="detail-input-row">
           <span className="field-name" title="Due date"><CalendarDays size={15} /><span className="sr-only">Due date</span></span>
           <input
+            className="date-input"
             type="date"
             value={task.dueDate ?? ""}
             onChange={(event) => void onUpdate({ dueDate: event.target.value || null })}
@@ -156,7 +159,10 @@ export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onR
           {task.completedAt ? (
             <button className="primary-action" onClick={onRestore}><RotateCcw size={15} />Restore to list</button>
           ) : (
-            <button className="primary-action" onClick={onComplete}><Check size={15} />Mark complete <kbd>⌘↵</kbd></button>
+            <button className="primary-action has-shortcut" onClick={onComplete}>
+              <span className="inspector-action-label"><Check size={15} />Mark complete</span>
+              <kbd>⌘↵</kbd>
+            </button>
           )}
           <button className="danger-action" onClick={onDelete}><Trash2 size={15} />Delete</button>
         </div>

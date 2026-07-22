@@ -54,7 +54,7 @@ export function FlatTaskList(props: FlatTaskListProps) {
               onMove={(bucket) => props.onMove(task.id, bucket)}
               onTogglePriority={() => props.onTogglePriority(task)}
               onDelete={() => props.onDelete(task.id)}
-              onReorder={() => undefined}
+              onDropTask={() => undefined}
             />
           ))}
         </div>

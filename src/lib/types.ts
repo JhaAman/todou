@@ -1,3 +1,5 @@
+import type { OpenCodeThemeFamilyId, OpenCodeThemeMode } from "./opencodeThemePalettes";
+
 export type Bucket = "today" | "inbox";
 export type Priority = "high" | "low";
 export type Area = "personal" | "work";
@@ -59,15 +61,7 @@ export type ShortcutAction =
   | "undo"
   | "quickEntry";
 
-export type ThemeId =
-  | "superhuman"
-  | "catppuccin"
-  | "dracula"
-  | "nord"
-  | "tokyo-night"
-  | "gruvbox"
-  | "one-dark"
-  | "solarized";
+export type ThemeId = "superhuman" | `${OpenCodeThemeFamilyId}-${OpenCodeThemeMode}`;
 
 export interface UndoAction {
   id: string;

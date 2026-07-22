@@ -226,6 +226,18 @@ pub fn set_preference(
 }
 
 #[tauri::command]
+pub fn set_sync_settings(
+    service: State<'_, TaskService>,
+    wake: State<'_, SyncWake>,
+    url: String,
+    publishable_key: String,
+) -> AppResult<Value> {
+    let value = service.set_sync_settings(&url, &publishable_key)?.result;
+    wake.wake();
+    Ok(value)
+}
+
+#[tauri::command]
 pub fn next_outbox(service: State<'_, TaskService>, limit: u32) -> AppResult<Vec<OutboxMutation>> {
     Ok(service.next_outbox(limit)?.result)
 }

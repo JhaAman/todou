@@ -22,8 +22,10 @@ interface TaskRowProps {
   onMove: (bucket: Task["bucket"]) => void;
   onTogglePriority: () => void;
   onDelete: () => void;
-  onReorder: (movingId: string, targetId: string, edge: "before" | "after") => void;
+  onDropTask: (movingId: string, targetId: string, edge: "before" | "after") => void;
 }
+
+export const taskDragType = "text/todou-task";
 
 function prettyDate(value: string): string {
   const parts = value.split("-").map(Number);
@@ -37,7 +39,7 @@ function prettyDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-export function TaskRow({ task, selected, semanticRole = "option", onSelect, onComplete, onRestore, onMove, onTogglePriority, onDelete, onReorder }: TaskRowProps) {
+export function TaskRow({ task, selected, semanticRole = "option", onSelect, onComplete, onRestore, onMove, onTogglePriority, onDelete, onDropTask }: TaskRowProps) {
   const [dropEdge, setDropEdge] = useState<"before" | "after" | null>(null);
 
   const stop = (event: MouseEvent, action: () => void) => {
@@ -54,14 +56,15 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const movingId = event.dataTransfer.getData("text/todou-task");
-    if (movingId && movingId !== task.id && dropEdge) onReorder(movingId, task.id, dropEdge);
+    event.stopPropagation();
+    const movingId = event.dataTransfer.getData(taskDragType);
+    if (movingId && movingId !== task.id && dropEdge) onDropTask(movingId, task.id, dropEdge);
     setDropEdge(null);
   };
 
   return (
     <div
-      className={`task-row area-${task.area} ${task.priority === "high" ? "is-high" : ""} ${selected ? "is-selected" : ""} ${task.completedAt ? "is-completed" : ""} ${dropEdge ? `drop-${dropEdge}` : ""}`}
+      className={`task-row area-${task.area} ${task.priority === "high" ? "is-high" : ""} ${selected ? "is-selected" : ""} ${task.completedAt ? "is-completed" : ""} ${dropEdge ? "is-task-drop-target" : ""}`}
       role={semanticRole}
       aria-selected={semanticRole === "option" ? selected : undefined}
       aria-current={semanticRole === "listitem" && selected ? "true" : undefined}
@@ -70,8 +73,9 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
       draggable={!task.completedAt}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/todou-task", task.id);
+        event.dataTransfer.setData(taskDragType, task.id);
       }}
+      onDragEnd={() => setDropEdge(null)}
       onDragOver={onDragOver}
       onDragLeave={() => setDropEdge(null)}
       onDrop={onDrop}

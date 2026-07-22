@@ -45,9 +45,29 @@ describe("command palette", () => {
 
     const dialog = screen.getByRole("dialog");
     fireEvent.keyDown(dialog, { key: "ArrowDown" });
-    await waitFor(() => expect(onThemePreview).toHaveBeenCalledWith("catppuccin"));
+    await waitFor(() => expect(onThemePreview).toHaveBeenCalledWith("oc-2-light"));
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(onThemePreview).toHaveBeenLastCalledWith("superhuman");
+  });
+
+  it("scrolls the keyboard-active theme row into view", async () => {
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+
+    try {
+      renderPalette("themes");
+      scrollIntoView.mockClear();
+
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "ArrowDown" });
+
+      const activeTheme = await screen.findByRole("option", { name: /OC-2 Light/i });
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" }));
+      expect(scrollIntoView.mock.instances.at(-1)).toBe(activeTheme);
+    } finally {
+      if (originalScrollIntoView) Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+      else delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
   });
 
   it("opens connection settings through a real command", () => {

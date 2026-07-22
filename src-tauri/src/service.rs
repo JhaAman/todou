@@ -594,6 +594,64 @@ impl TaskService {
         Ok((url, key))
     }
 
+    pub fn set_sync_settings(
+        &self,
+        url: &str,
+        publishable_key: &str,
+    ) -> AppResult<Revisioned<Value>> {
+        let url = url.trim();
+        let publishable_key = publishable_key.trim();
+        if url.is_empty() != publishable_key.is_empty() {
+            return Err(AppError::invalid_input(
+                "Supabase URL and publishable key are both required",
+            ));
+        }
+        let url_value = Value::String(url.to_owned());
+        let key_value = Value::String(publishable_key.to_owned());
+        let encoded_url = serde_json::to_string(&url_value)?;
+        let encoded_key = serde_json::to_string(&key_value)?;
+        if encoded_url.len() > 256 * 1024 || encoded_key.len() > 256 * 1024 {
+            return Err(AppError::invalid_input("preference value is too large"));
+        }
+
+        let next_url = (!url.is_empty()).then(|| url.to_owned());
+        let next_key = (!publishable_key.is_empty()).then(|| publishable_key.to_owned());
+        let now = hlc::timestamp(self.inner.clock.now_millis())?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let changed = preference_string(&transaction, "supabaseUrl")? != next_url
+            || preference_string(&transaction, "supabasePublishableKey")? != next_key;
+        for (key, encoded) in [
+            ("supabaseUrl", encoded_url),
+            ("supabasePublishableKey", encoded_key),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO preferences(key, value_json, updated_at) VALUES (?1, ?2, ?3) \
+                     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+                    params![key, encoded, now],
+                )
+                .map_err(AppError::from)?;
+        }
+        if changed {
+            transaction
+                .execute(
+                    "DELETE FROM metadata WHERE key IN ('sync_epoch', 'last_successful_sync', 'last_sync_error')",
+                    [],
+                )
+                .map_err(AppError::from)?;
+            metadata_set(&transaction, "sync_seq", "0")?;
+        }
+        let revision = bump_revision(&transaction)?;
+        transaction.commit().map_err(AppError::from)?;
+        Ok(Revisioned::new(
+            json!({ "url": url, "publishableKey": publishable_key }),
+            revision,
+        ))
+    }
+
     pub fn mark_sync_success(&self) -> AppResult<()> {
         let now = hlc::timestamp(self.inner.clock.now_millis())?;
         let mut connection = self.inner.connection.lock();

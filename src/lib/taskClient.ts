@@ -1,7 +1,15 @@
 import { demoTasks } from "./demoData";
 import { loadPreferences } from "./preferences";
 import { compareTasks } from "./taskOrdering";
-import { emptySyncSettings, environmentSyncSettings, type SyncSettings } from "./syncSettings";
+import {
+  checkSupabaseConnection,
+  emptySyncSettings,
+  environmentSyncSettings,
+  type NativeSyncDiagnostics,
+  type SyncConnectionCheck,
+  type SyncDiagnostics,
+  type SyncSettings,
+} from "./syncSettings";
 import type { CreateTaskInput, EditableTaskPatch, Task, TaskFilter } from "./types";
 
 export interface ExportResult {
@@ -22,6 +30,8 @@ export interface TaskClient {
   exportTasks(): Promise<ExportResult>;
   getSyncSettings(): Promise<SyncSettings>;
   setSyncSettings(settings: SyncSettings): Promise<void>;
+  testSyncConnection(settings: SyncSettings): Promise<SyncConnectionCheck>;
+  getSyncDiagnostics(): Promise<SyncDiagnostics>;
   wakeSync(): Promise<void>;
   registerQuickEntryShortcut(shortcut: string): Promise<void>;
   subscribe(listener: () => void): Promise<() => void>;
@@ -199,6 +209,10 @@ function browserClient(): TaskClient {
     async setSyncSettings(settings) {
       localStorage.setItem(browserSyncSettingsKey, JSON.stringify(settings));
     },
+    testSyncConnection: checkSupabaseConnection,
+    async getSyncDiagnostics() {
+      return { runtime: "browser", syncAvailable: false };
+    },
     async wakeSync() {},
     async registerQuickEntryShortcut() {},
     async subscribe(listener) {
@@ -269,12 +283,15 @@ function tauriClient(): TaskClient {
       };
     },
     async setSyncSettings(settings) {
-      await invokeResult<unknown>("set_preference", { key: "supabaseUrl", value: settings.url });
-      await invokeResult<unknown>("set_preference", {
-        key: "supabasePublishableKey",
-        value: settings.publishableKey,
+      await invokeResult<unknown>("set_sync_settings", {
+        url: settings.url,
+        publishableKey: settings.publishableKey,
       });
-      await invoke<number>("wake_sync");
+    },
+    testSyncConnection: checkSupabaseConnection,
+    async getSyncDiagnostics() {
+      const diagnostics = await invokeResult<Omit<NativeSyncDiagnostics, "runtime" | "syncAvailable">>("sync_diagnostics");
+      return { ...diagnostics, runtime: "tauri", syncAvailable: true };
     },
     async wakeSync() {
       await invoke<number>("wake_sync");

@@ -124,6 +124,69 @@ fn empty_sync_preferences_disable_sync_without_an_error() {
 }
 
 #[test]
+fn changing_sync_credentials_atomically_resets_endpoint_diagnostics() {
+    let service = service();
+    service
+        .set_sync_settings("https://first.supabase.co", "first-key")
+        .unwrap();
+    assert_eq!(
+        service.sync_preferences().unwrap(),
+        (
+            Some("https://first.supabase.co".into()),
+            Some("first-key".into())
+        )
+    );
+    assert!(service
+        .set_sync_settings("https://partial.supabase.co", "")
+        .is_err());
+    assert_eq!(
+        service.sync_preferences().unwrap(),
+        (
+            Some("https://first.supabase.co".into()),
+            Some("first-key".into())
+        )
+    );
+    let first_epoch = epoch();
+    service
+        .bootstrap_remote(BootstrapPayload {
+            protocol_version: PROTOCOL_VERSION,
+            epoch: first_epoch.clone(),
+            watermark: 9,
+            tasks: vec![],
+        })
+        .unwrap();
+    service.mark_sync_success().unwrap();
+    service
+        .mark_sync_failure("Remote request timed out")
+        .unwrap();
+
+    service
+        .set_sync_settings("  https://first.supabase.co  ", " first-key ")
+        .unwrap();
+    let unchanged = service.sync_diagnostics().unwrap().result;
+    assert_eq!(unchanged["cursor"]["epoch"], json!(first_epoch));
+    assert_eq!(unchanged["cursor"]["sequence"], json!(9));
+    assert!(unchanged["lastSuccessfulSync"].is_string());
+    assert_eq!(unchanged["lastError"], json!("Remote request timed out"));
+
+    service
+        .set_sync_settings("https://second.supabase.co", "second-key")
+        .unwrap();
+    assert_eq!(
+        service.sync_preferences().unwrap(),
+        (
+            Some("https://second.supabase.co".into()),
+            Some("second-key".into())
+        )
+    );
+    let changed = service.sync_diagnostics().unwrap().result;
+    assert_eq!(changed["cursor"]["epoch"], json!(null));
+    assert_eq!(changed["cursor"]["sequence"], json!(0));
+    assert_eq!(changed["lastSuccessfulSync"], json!(null));
+    assert_eq!(changed["lastError"], json!(null));
+}
+
+#[test]
 fn due_and_move_transitions_preserve_schedule_invariant() {
     let service = service();
     let mut due = input("Due already");

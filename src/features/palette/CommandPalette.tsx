@@ -71,6 +71,7 @@ export function CommandPalette(props: CommandPaletteProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const themeOrigin = useRef(props.committedTheme);
   const themeCommitted = useRef(false);
 
@@ -148,6 +149,10 @@ export function CommandPalette(props: CommandPaletteProps) {
   useEffect(() => {
     setActiveIndex((current) => Math.min(current, Math.max(0, filteredCommands.length - 1)));
   }, [filteredCommands.length]);
+
+  useEffect(() => {
+    if (props.open) activeRowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, mode, props.open]);
 
   const requestOpenChange = (open: boolean) => {
     if (!open && mode === "themes" && !themeCommitted.current) props.onThemePreview(themeOrigin.current);
@@ -240,6 +245,7 @@ export function CommandPalette(props: CommandPaletteProps) {
                 filteredCommands.length ? filteredCommands.map((command, index) => (
                   <button
                     key={command.id}
+                    ref={index === activeIndex ? activeRowRef : undefined}
                     className={`palette-row ${index === activeIndex ? "is-active" : ""}`}
                     onMouseEnter={() => setActiveIndex(index)}
                     onClick={command.run}
@@ -256,6 +262,7 @@ export function CommandPalette(props: CommandPaletteProps) {
               {mode === "themes" && themes.map((theme, index) => (
                 <button
                   key={theme.id}
+                  ref={index === activeIndex ? activeRowRef : undefined}
                   className={`theme-row ${index === activeIndex ? "is-active" : ""}`}
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => {
@@ -266,7 +273,7 @@ export function CommandPalette(props: CommandPaletteProps) {
                   role="option"
                   aria-selected={index === activeIndex}
                 >
-                  <span className="theme-swatches">{theme.colors.map((color) => <i key={color} style={{ background: color }} />)}</span>
+                  <span className="theme-swatches">{theme.colors.map((color, swatchIndex) => <i key={swatchIndex} style={{ background: color }} />)}</span>
                   <span className="palette-copy"><strong>{theme.name}</strong><small>{theme.description}</small></span>
                   {props.committedTheme === theme.id && <Check size={16} />}
                 </button>
@@ -275,6 +282,7 @@ export function CommandPalette(props: CommandPaletteProps) {
               {mode === "shortcuts" && shortcutActions.map((action, index) => (
                 <button
                   key={action}
+                  ref={index === activeIndex ? activeRowRef : undefined}
                   className={`shortcut-row ${index === activeIndex ? "is-active" : ""} ${recording === action ? "is-recording" : ""}`}
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => { setRecording(action); setShortcutError(null); }}

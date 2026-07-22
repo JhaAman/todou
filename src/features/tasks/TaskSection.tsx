@@ -1,10 +1,11 @@
 import { Plus } from "lucide-react";
-import type { ReactNode } from "react";
-import type { Task } from "../../lib/types";
-import { TaskRow } from "./TaskRow";
+import type { DragEvent, ReactNode } from "react";
+import type { Bucket, Task } from "../../lib/types";
+import { taskDragType, TaskRow } from "./TaskRow";
 
 interface TaskSectionProps {
   title: string;
+  bucket: Bucket;
   hideHeader?: boolean;
   tasks: Task[];
   selectedTaskId: string | null;
@@ -15,7 +16,8 @@ interface TaskSectionProps {
   onMove: (id: string, bucket: Task["bucket"]) => void;
   onTogglePriority: (task: Task) => void;
   onDelete: (id: string) => void;
-  onReorder: (movingId: string, targetId: string, edge: "before" | "after") => void;
+  onDropTask: (movingId: string, targetId: string, edge: "before" | "after") => void;
+  onDropIntoBucket: (movingId: string, bucket: Bucket) => void;
   children?: ReactNode;
 }
 
@@ -32,15 +34,29 @@ export function TaskSection(props: TaskSectionProps) {
       onMove={(bucket) => props.onMove(task.id, bucket)}
       onTogglePriority={() => props.onTogglePriority(task)}
       onDelete={() => props.onDelete(task.id)}
-      onReorder={props.onReorder}
+      onDropTask={props.onDropTask}
     />
   ));
+
+  const handleDragOver = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    const movingId = event.dataTransfer.getData(taskDragType);
+    if (movingId) props.onDropIntoBucket(movingId, props.bucket);
+  };
 
   return (
     <section
       className="task-section"
+      data-drop-target={props.bucket}
       aria-label={props.hideHeader ? `${props.title} tasks` : undefined}
       aria-labelledby={props.hideHeader ? undefined : `section-${props.title.toLocaleLowerCase()}`}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       {!props.hideHeader && (
         <header className="section-header">
@@ -58,7 +74,12 @@ export function TaskSection(props: TaskSectionProps) {
         <div className="task-list" role="list" aria-label={`${props.title} tasks`}>
           {renderRows(props.tasks)}
         </div>
-      ) : <span className="sr-only">{props.title} is empty</span>}
+      ) : (
+        <div className="task-list flat-empty" data-empty="true">
+          Drop tasks here
+          <span className="sr-only">. {props.title} is empty</span>
+        </div>
+      )}
     </section>
   );
 }

@@ -92,6 +92,7 @@ pub fn run() {
             commands::export_tasks_to_file,
             commands::get_preferences,
             commands::set_preference,
+            commands::set_sync_settings,
             commands::next_outbox,
             commands::ack_outbox,
             commands::apply_remote_page,

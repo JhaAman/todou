@@ -31,6 +31,26 @@ export const shortcutLabels: Record<ShortcutAction, string> = {
 
 const modifierOrder = ["Ctrl", "Alt", "Shift", "Meta"];
 
+const interactiveTargetSelector = [
+  "a[href]",
+  "button",
+  "input",
+  "select",
+  "summary",
+  "textarea",
+  "[contenteditable]:not([contenteditable='false'])",
+  "[role='button']",
+  "[role='checkbox']",
+  "[role='combobox']",
+  "[role='link']",
+  "[role='menuitem']",
+  "[role='option']",
+  "[role='radio']",
+  "[role='switch']",
+  "[role='textbox']",
+  "[tabindex]:not([tabindex='-1'])",
+].join(", ");
+
 function normalizeShortcut(shortcut: string): string {
   const parts = shortcut.split("+").filter(Boolean);
   const modifiers = parts
@@ -57,6 +77,10 @@ export function shortcutFromEvent(event: KeyboardEvent | ReactKeyboardEvent): st
 export function shortcutMatches(event: KeyboardEvent | ReactKeyboardEvent, shortcut: string): boolean {
   const eventShortcut = shortcutFromEvent(event);
   return eventShortcut !== null && eventShortcut === normalizeShortcut(shortcut);
+}
+
+export function isInteractiveShortcutTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest(interactiveTargetSelector));
 }
 
 export function displayShortcut(shortcut: string): string {

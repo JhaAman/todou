@@ -6,6 +6,7 @@ use crate::{
     error::ErrorCode,
     service::TaskService,
 };
+use chrono::{DateTime, SecondsFormat, Utc};
 use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -294,8 +295,32 @@ struct RemoteTaskRow {
     deletion_clock: String,
 }
 
+fn canonical_remote_timestamp(value: String, field: &str) -> Result<String, SyncFailure> {
+    DateTime::parse_from_rfc3339(&value)
+        .map(|timestamp| {
+            timestamp
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
+        })
+        .map_err(|_| {
+            SyncFailure::retryable(format!(
+                "Invalid Supabase response: {field} must be an RFC 3339 timestamp"
+            ))
+        })
+}
+
 impl RemoteTaskRow {
     fn into_task(self) -> Result<Task, SyncFailure> {
+        let completed_at = self
+            .completed_at
+            .map(|value| canonical_remote_timestamp(value, "completed_at"))
+            .transpose()?;
+        let deleted_at = self
+            .deleted_at
+            .map(|value| canonical_remote_timestamp(value, "deleted_at"))
+            .transpose()?;
+        let created_at = canonical_remote_timestamp(self.created_at, "created_at")?;
+        let updated_at = canonical_remote_timestamp(self.updated_at, "updated_at")?;
         let task = Task {
             id: self.id,
             title: self.title,
@@ -305,10 +330,10 @@ impl RemoteTaskRow {
             due_date: self.due_date,
             estimate_minutes: self.estimate_minutes,
             order_key: self.order_key,
-            completed_at: self.completed_at,
-            deleted_at: self.deleted_at,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
+            completed_at,
+            deleted_at,
+            created_at,
+            updated_at,
             clocks: TaskClocks {
                 title: self.title_clock,
                 schedule: self.schedule_clock,
@@ -579,11 +604,104 @@ mod tests {
     };
     use crate::{
         domain::{Area, Bucket, CreateTaskInput, Priority, TaskFilter, UpdateTaskPatch},
+        hlc::ClockSource,
         service::TaskService,
     };
+    use chrono::NaiveDate;
     use reqwest::StatusCode;
-    use std::env;
+    use std::{env, sync::Arc};
     use tempfile::tempdir;
+
+    struct FixedClock {
+        millis: i64,
+    }
+
+    impl ClockSource for FixedClock {
+        fn now_millis(&self) -> i64 {
+            self.millis
+        }
+
+        fn local_date(&self) -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 7, 21).unwrap()
+        }
+    }
+
+    fn postgres_utc_spelling(value: &str, omit_zero_fraction: bool) -> String {
+        let without_z = value.strip_suffix('Z').unwrap();
+        let value = if omit_zero_fraction {
+            without_z.strip_suffix(".000").unwrap_or(without_z)
+        } else {
+            without_z
+        };
+        format!("{value}+00:00")
+    }
+
+    fn equivalent_completion_acknowledges(millis: i64, omit_zero_fraction: bool) {
+        let service = TaskService::in_memory_with_clock(Arc::new(FixedClock { millis })).unwrap();
+        let created = service
+            .create_task(CreateTaskInput {
+                id: None,
+                title: "Timestamp equivalence".to_owned(),
+                bucket: Bucket::Inbox,
+                priority: Priority::Low,
+                area: Area::Personal,
+                due_date: None,
+                estimate_minutes: None,
+            })
+            .unwrap()
+            .result;
+        let completed = service.complete_task(&created.id).unwrap().result;
+        let operation = service
+            .next_outbox(100)
+            .unwrap()
+            .result
+            .into_iter()
+            .find(|mutation| {
+                mutation.registers.len() == 1 && mutation.registers.contains_key("completion")
+            })
+            .unwrap();
+        let remote = RemoteTaskRow {
+            id: completed.id.clone(),
+            title: completed.title.clone(),
+            bucket: completed.bucket,
+            priority: completed.priority,
+            area: completed.area,
+            due_date: completed.due_date.clone(),
+            estimate_minutes: completed.estimate_minutes,
+            order_key: completed.order_key.clone(),
+            completed_at: completed
+                .completed_at
+                .as_deref()
+                .map(|value| postgres_utc_spelling(value, omit_zero_fraction)),
+            deleted_at: None,
+            created_at: postgres_utc_spelling(&completed.created_at, omit_zero_fraction),
+            updated_at: postgres_utc_spelling(&completed.updated_at, omit_zero_fraction),
+            title_clock: completed.clocks.title.clone(),
+            schedule_clock: completed.clocks.schedule.clone(),
+            priority_clock: completed.clocks.priority.clone(),
+            area_clock: completed.clocks.area.clone(),
+            estimate_clock: completed.clocks.estimate.clone(),
+            order_clock: completed.clocks.order.clone(),
+            completion_clock: completed.clocks.completion.clone(),
+            deletion_clock: completed.clocks.deletion.clone(),
+        }
+        .into_task()
+        .unwrap();
+
+        let acknowledged = service
+            .ack_outbox(&operation.operation_id, remote)
+            .unwrap()
+            .result;
+
+        assert_eq!(acknowledged.completed_at, completed.completed_at);
+        assert_eq!(acknowledged.created_at, completed.created_at);
+        assert!(service
+            .next_outbox(100)
+            .unwrap()
+            .result
+            .iter()
+            .all(|pending| pending.operation_id != operation.operation_id));
+    }
 
     async fn push_outbox(service: &TaskService, transport: &SupabaseTransport) {
         loop {
@@ -668,6 +786,16 @@ mod tests {
         let task = row.into_task().unwrap();
         assert_eq!(task.estimate_minutes, Some(25));
         assert_eq!(task.clocks.title, task.clocks.deletion);
+    }
+
+    #[test]
+    fn postgres_utc_offset_completion_acknowledges_at_the_same_clock() {
+        equivalent_completion_acknowledges(1_784_666_158_943, false);
+    }
+
+    #[test]
+    fn postgres_whole_second_completion_acknowledges_at_the_same_clock() {
+        equivalent_completion_acknowledges(1_784_666_158_000, true);
     }
 
     #[tokio::test]
