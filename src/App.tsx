@@ -80,6 +80,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("not-connected");
   const [buildingInstaller, setBuildingInstaller] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchReturnViewRef = useRef<View>("home");
   const noticeTimerRef = useRef<number | null>(null);
   const shortcutTipTimerRef = useRef<number | null>(null);
 
@@ -202,10 +203,11 @@ export default function App() {
   }, []);
 
   const navigate = useCallback((next: View) => {
+    if (next === "search" && view !== "search") searchReturnViewRef.current = view;
     setView(next);
     setComposerBucket(null);
     if (next === "search") window.setTimeout(() => searchInputRef.current?.focus(), 0);
-  }, []);
+  }, [view]);
 
   const openComposer = useCallback((bucket?: Bucket) => {
     const defaultBucket = bucket ?? (view === "inbox" ? "inbox" : view === "today" || view === "home" ? "today" : "inbox");
@@ -355,6 +357,12 @@ export default function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       const isEditing = Boolean(target?.closest("input, select, textarea, [contenteditable]:not([contenteditable='false'])"));
+      if (paletteOpen) return;
+      if (event.key === "Escape" && view === "search") {
+        event.preventDefault();
+        navigate(searchReturnViewRef.current);
+        return;
+      }
       if (shortcutMatches(event, preferences.shortcuts.commandPalette)) {
         event.preventDefault();
         openPalette("commands");
@@ -365,7 +373,7 @@ export default function App() {
         navigate("search");
         return;
       }
-      if (paletteOpen || isEditing) return;
+      if (isEditing) return;
       const isUnmodifiedSpace = shortcutMatches(event, "Space");
       const canUseAmbientSpace = !selectedTask && !isInteractiveShortcutTarget(event.target);
       if (shortcutMatches(event, preferences.shortcuts.newTask)) {
@@ -428,7 +436,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [preferences.shortcuts, paletteOpen, selectedTask, selectedTaskId, visibleTasks, controller, openComposer, openPalette, navigate, togglePriority, deleteTask]);
+  }, [preferences.shortcuts, paletteOpen, view, selectedTask, selectedTaskId, visibleTasks, controller, openComposer, openPalette, navigate, togglePriority, deleteTask]);
 
   const sectionProps = {
     selectedTaskId,
