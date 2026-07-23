@@ -229,6 +229,24 @@ describe("new task keyboard shortcuts", () => {
   });
 });
 
+describe("search navigation", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("returns to the previous view when Escape is pressed after opening search with Command-P", async () => {
+    await renderApp([
+      task({ id: "inbox-task", title: "Plan next week", bucket: "inbox" }),
+    ]);
+    fireEvent.click(within(screen.getByLabelText("Primary navigation")).getByRole("button", { name: /^Inbox/ }));
+
+    fireEvent.keyDown(document.body, { key: "p", metaKey: true });
+
+    const search = await screen.findByRole("textbox", { name: "Search" });
+    fireEvent.keyDown(search, { key: "Escape" });
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
+  });
+});
+
 describe("sync settings", () => {
   beforeEach(() => localStorage.clear());
 

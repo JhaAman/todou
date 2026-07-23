@@ -30,6 +30,7 @@ describe("task inspector", () => {
         onComplete={vi.fn()}
         onRestore={vi.fn()}
         onDelete={vi.fn()}
+        completeShortcut="Meta+Enter"
       />,
     );
 
@@ -49,6 +50,7 @@ describe("task inspector", () => {
         onComplete={vi.fn()}
         onRestore={vi.fn()}
         onDelete={vi.fn()}
+        completeShortcut="Meta+Enter"
       />,
     );
 
@@ -70,6 +72,7 @@ describe("task inspector", () => {
         onComplete={vi.fn()}
         onRestore={vi.fn()}
         onDelete={vi.fn()}
+        completeShortcut="Meta+Enter"
       />,
     );
 

@@ -11,6 +11,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
+import { KeyHint } from "../../components/KeyHint";
 import { formatEstimate, parseEstimate } from "../../lib/naturalLanguage";
 import { taskDescriptionMaxLength, type EditableTaskPatch, type Task } from "../../lib/types";
 
@@ -18,13 +19,14 @@ interface TaskInspectorProps {
   task: Task;
   onClose: () => void;
   onUpdate: (patch: EditableTaskPatch) => Promise<unknown>;
-  onMove: (bucket: Task["bucket"]) => Promise<unknown>;
+  onMove: (bucket: Task["bucket"]) => void;
   onComplete: () => void;
   onRestore: () => void;
   onDelete: () => void;
+  completeShortcut: string;
 }
 
-export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onRestore, onDelete }: TaskInspectorProps) {
+export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onRestore, onDelete, completeShortcut }: TaskInspectorProps) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [estimate, setEstimate] = useState(formatEstimate(task.estimateMinutes));
@@ -183,7 +185,7 @@ export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onR
           ) : (
             <button className="primary-action has-shortcut" onClick={onComplete}>
               <span className="inspector-action-label"><Check size={15} />Mark complete</span>
-              <kbd>⌘↵</kbd>
+              <KeyHint shortcut={completeShortcut} />
             </button>
           )}
           <button className="danger-action" onClick={onDelete}><Trash2 size={15} />Delete</button>
