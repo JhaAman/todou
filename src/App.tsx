@@ -19,7 +19,7 @@ import { TaskInspector } from "./features/tasks/TaskInspector";
 import { TaskSection } from "./features/tasks/TaskSection";
 import { useTaskController } from "./features/tasks/useTaskController";
 import { loadPreferences, savePreferences } from "./lib/preferences";
-import { isInteractiveShortcutTarget, shortcutMatches } from "./lib/shortcuts";
+import { isInteractiveShortcutTarget, shortcutLabels, shortcutMatches } from "./lib/shortcuts";
 import { startRealtimeWake } from "./lib/realtimeWake";
 import {
   emptySyncSettings,
@@ -30,13 +30,15 @@ import {
 import { isTauriRuntime, taskClient } from "./lib/taskClient";
 import { completedTasks, reorderAnchors, searchTasks, tasksForBucket } from "./lib/taskOrdering";
 import { applyTheme, themeById } from "./lib/themes";
-import type { AppPreferences, Bucket, Task, ThemeId, View } from "./lib/types";
+import type { AppPreferences, Bucket, ShortcutAction, Task, ThemeId, View } from "./lib/types";
 
 function formatHeaderDate(): string {
   return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
 }
 
 const shortcutWarningKey = "todou.quick-entry-shortcut-warning.v1";
+type TaskShortcutAction = Extract<ShortcutAction, "complete" | "moveToday" | "moveInbox" | "togglePriority" | "toggleArea" | "delete">;
+type ShortcutTip = { action: TaskShortcutAction; label: string };
 
 function viewTitle(view: View): { title: string; subtitle?: string; icon: typeof Sparkles } {
   if (view === "today") return { title: "Today", subtitle: formatHeaderDate(), icon: CalendarDays };
@@ -70,6 +72,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [logbookQuery, setLogbookQuery] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [shortcutTip, setShortcutTip] = useState<ShortcutTip | null>(null);
   const [shortcutWarning, setShortcutWarning] = useState<string | null>(() => localStorage.getItem(shortcutWarningKey));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>(emptySyncSettings);
@@ -78,6 +81,7 @@ export default function App() {
   const [buildingInstaller, setBuildingInstaller] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const shortcutTipTimerRef = useRef<number | null>(null);
 
   const todayTasks = useMemo(() => tasksForBucket(controller.tasks, "today"), [controller.tasks]);
   const inboxTasks = useMemo(() => tasksForBucket(controller.tasks, "inbox"), [controller.tasks]);
@@ -169,8 +173,18 @@ export default function App() {
     }, 4_500);
   }, []);
 
+  const showShortcutTip = useCallback((action: TaskShortcutAction, label = shortcutLabels[action]) => {
+    if (shortcutTipTimerRef.current) window.clearTimeout(shortcutTipTimerRef.current);
+    setShortcutTip({ action, label });
+    shortcutTipTimerRef.current = window.setTimeout(() => {
+      shortcutTipTimerRef.current = null;
+      setShortcutTip(null);
+    }, 4_500);
+  }, []);
+
   useEffect(() => () => {
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    if (shortcutTipTimerRef.current) window.clearTimeout(shortcutTipTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -271,10 +285,28 @@ export default function App() {
     }
   }, [buildingInstaller, showNotice]);
 
+  const completeTask = useCallback((id: string) => {
+    void controller.completeTask(id);
+    showShortcutTip("complete");
+  }, [controller.completeTask, showShortcutTip]);
+
+  const restoreTask = useCallback((id: string) => {
+    void controller.restoreTask(id);
+    showShortcutTip("complete", "Restore selected task");
+  }, [controller.restoreTask, showShortcutTip]);
+
+  const moveTask = useCallback((id: string, bucket: Bucket) => {
+    const task = controller.tasks.find((candidate) => candidate.id === id);
+    if (!task || task.bucket === bucket) return;
+    void controller.moveTask(id, bucket);
+    showShortcutTip(bucket === "today" ? "moveToday" : "moveInbox");
+  }, [controller.moveTask, controller.tasks, showShortcutTip]);
+
   const deleteTask = useCallback((id: string) => {
     void controller.deleteTask(id);
+    showShortcutTip("delete");
     if (selectedTaskId === id) setSelectedTaskId(null);
-  }, [controller.deleteTask, selectedTaskId]);
+  }, [controller.deleteTask, selectedTaskId, showShortcutTip]);
 
   const reorderTask = useCallback((movingId: string, targetId: string, edge: "before" | "after") => {
     const anchors = reorderAnchors(controller.tasks, movingId, targetId, edge);
@@ -290,20 +322,26 @@ export default function App() {
     const target = controller.tasks.find(({ id, completedAt, deletedAt }) => id === targetId && !completedAt && !deletedAt);
     if (!moving || !target) return;
     if (moving.bucket !== target.bucket) {
-      void controller.moveTask(moving.id, target.bucket);
+      moveTask(moving.id, target.bucket);
       return;
     }
     reorderTask(moving.id, target.id, edge);
-  }, [controller.tasks, controller.moveTask, reorderTask]);
+  }, [controller.tasks, moveTask, reorderTask]);
 
   const dropTaskIntoBucket = useCallback((movingId: string, bucket: Bucket) => {
     const moving = controller.tasks.find(({ id, completedAt, deletedAt }) => id === movingId && !completedAt && !deletedAt);
-    if (moving && moving.bucket !== bucket) void controller.moveTask(moving.id, bucket);
-  }, [controller.tasks, controller.moveTask]);
+    if (moving && moving.bucket !== bucket) moveTask(moving.id, bucket);
+  }, [controller.tasks, moveTask]);
 
   const togglePriority = useCallback((task: Task) => {
     void controller.updateTask(task.id, { priority: task.priority === "high" ? "low" : "high" });
-  }, [controller.updateTask]);
+    showShortcutTip("togglePriority");
+  }, [controller.updateTask, showShortcutTip]);
+
+  const toggleArea = useCallback((task: Task) => {
+    void controller.updateTask(task.id, { area: task.area === "work" ? "personal" : "work" });
+    showShortcutTip("toggleArea");
+  }, [controller.updateTask, showShortcutTip]);
 
   const visibleTasks = useMemo(() => {
     if (view === "today") return todayTasks;
@@ -395,13 +433,15 @@ export default function App() {
   const sectionProps = {
     selectedTaskId,
     onSelect: setSelectedTaskId,
-    onComplete: (id: string) => void controller.completeTask(id),
-    onRestore: (id: string) => void controller.restoreTask(id),
-    onMove: (id: string, bucket: Bucket) => void controller.moveTask(id, bucket),
+    onComplete: completeTask,
+    onRestore: restoreTask,
+    onMove: moveTask,
     onTogglePriority: togglePriority,
+    onToggleArea: toggleArea,
     onDelete: deleteTask,
     onDropTask: dropTaskOnRow,
     onDropIntoBucket: dropTaskIntoBucket,
+    shortcuts: preferences.shortcuts,
   };
 
   const composer = (bucket: Bucket) => composerBucket === bucket ? (
@@ -485,11 +525,16 @@ export default function App() {
         <TaskInspector
           task={selectedTask}
           onClose={() => setSelectedTaskId(null)}
-          onUpdate={(patch) => controller.updateTask(selectedTask.id, patch)}
-          onMove={(bucket) => controller.moveTask(selectedTask.id, bucket)}
-          onComplete={() => void controller.completeTask(selectedTask.id)}
-          onRestore={() => void controller.restoreTask(selectedTask.id)}
+          onUpdate={(patch) => {
+            if (patch.priority !== undefined) showShortcutTip("togglePriority");
+            if (patch.area !== undefined) showShortcutTip("toggleArea");
+            return controller.updateTask(selectedTask.id, patch);
+          }}
+          onMove={(bucket) => moveTask(selectedTask.id, bucket)}
+          onComplete={() => completeTask(selectedTask.id)}
+          onRestore={() => restoreTask(selectedTask.id)}
           onDelete={() => deleteTask(selectedTask.id)}
+          completeShortcut={preferences.shortcuts.complete}
         />
       ) : <InspectorPlaceholder />}
 
@@ -504,11 +549,11 @@ export default function App() {
         {...(import.meta.env.DEV && isTauriRuntime() ? { onBuildInstaller: () => void buildProductionApp() } : {})}
         selectedTask={selectedTask}
         canUndo={Boolean(controller.undo)}
-        onCompleteSelected={() => { if (selectedTask) void controller.completeTask(selectedTask.id); }}
-        onRestoreSelected={() => { if (selectedTask) void controller.restoreTask(selectedTask.id); }}
-        onMoveSelected={(bucket) => { if (selectedTask) void controller.moveTask(selectedTask.id, bucket); }}
+        onCompleteSelected={() => { if (selectedTask) completeTask(selectedTask.id); }}
+        onRestoreSelected={() => { if (selectedTask) restoreTask(selectedTask.id); }}
+        onMoveSelected={(bucket) => { if (selectedTask) moveTask(selectedTask.id, bucket); }}
         onTogglePrioritySelected={() => { if (selectedTask) togglePriority(selectedTask); }}
-        onToggleAreaSelected={() => { if (selectedTask) void controller.updateTask(selectedTask.id, { area: selectedTask.area === "work" ? "personal" : "work" }); }}
+        onToggleAreaSelected={() => { if (selectedTask) toggleArea(selectedTask); }}
         onDeleteSelected={() => { if (selectedTask) deleteTask(selectedTask.id); }}
         onUndo={() => void controller.runUndo()}
         committedTheme={preferences.themeId}
@@ -534,6 +579,13 @@ export default function App() {
           <span>{controller.undo.label}</span>
           <button onClick={() => void controller.runUndo()}>Undo <KeyHint shortcut={preferences.shortcuts.undo} /></button>
           <span className="undo-timer" />
+        </div>
+      )}
+      {shortcutTip && (
+        <div className={`shortcut-tip-toast ${controller.undo ? "has-undo" : ""}`} role="status">
+          <span>Next time, use</span>
+          <KeyHint shortcut={preferences.shortcuts[shortcutTip.action]} />
+          <span>to {shortcutTip.label.toLocaleLowerCase()}</span>
         </div>
       )}
       {notice && <div className="notice-toast" role="status">{notice}</div>}
