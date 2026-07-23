@@ -11,6 +11,16 @@ Todou is a local-first, keyboard-driven task manager for macOS. Every action com
 - A local MCP server that reads and changes the same SQLite-backed task service.
 - Local Supabase schema, idempotent merge RPCs, ordered change feed, bootstrap, and pgTAP contract tests.
 
+## First-time setup
+
+After cloning the repository, run this once from its root directory:
+
+```sh
+git config --local core.hooksPath "$PWD/.githooks"
+```
+
+This enables the checked-in Git hook. It automatically runs `bun install --frozen-lockfile` whenever Git creates a worktree, including a Codex task worktree. Each worktree keeps its own `node_modules`, while Bun reuses its package cache.
+
 ## Develop
 
 Requirements: Apple-silicon macOS, Bun 1.3.14+, Rust 1.85+, Docker Desktop, and the Xcode command-line tools.
