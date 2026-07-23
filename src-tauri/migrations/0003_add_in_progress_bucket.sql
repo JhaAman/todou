@@ -1,6 +1,7 @@
 CREATE TABLE tasks_next (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 10000),
     bucket TEXT NOT NULL CHECK (bucket IN ('in_progress', 'today', 'inbox')),
     priority TEXT NOT NULL CHECK (priority IN ('high', 'low')),
     area TEXT NOT NULL CHECK (area IN ('personal', 'work')),
@@ -12,6 +13,7 @@ CREATE TABLE tasks_next (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     title_clock TEXT COLLATE BINARY NOT NULL,
+    description_clock TEXT COLLATE BINARY NOT NULL,
     schedule_clock TEXT COLLATE BINARY NOT NULL,
     priority_clock TEXT COLLATE BINARY NOT NULL,
     area_clock TEXT COLLATE BINARY NOT NULL,
@@ -25,14 +27,16 @@ CREATE TABLE tasks_next (
 );
 
 INSERT INTO tasks_next (
-    id, title, bucket, priority, area, due_date, estimate_minutes, order_key,
-    completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock,
-    priority_clock, area_clock, estimate_clock, order_clock, completion_clock, deletion_clock
+    id, title, description, bucket, priority, area, due_date, estimate_minutes, order_key,
+    completed_at, deleted_at, created_at, updated_at, title_clock, description_clock,
+    schedule_clock, priority_clock, area_clock, estimate_clock, order_clock, completion_clock,
+    deletion_clock
 )
 SELECT
-    id, title, bucket, priority, area, due_date, estimate_minutes, order_key,
-    completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock,
-    priority_clock, area_clock, estimate_clock, order_clock, completion_clock, deletion_clock
+    id, title, description, bucket, priority, area, due_date, estimate_minutes, order_key,
+    completed_at, deleted_at, created_at, updated_at, title_clock, description_clock,
+    schedule_clock, priority_clock, area_clock, estimate_clock, order_clock, completion_clock,
+    deletion_clock
 FROM tasks;
 
 DROP TABLE tasks;
@@ -45,3 +49,6 @@ CREATE INDEX tasks_active_order
 CREATE INDEX tasks_logbook
     ON tasks(completed_at DESC, id)
     WHERE deleted_at IS NULL AND completed_at IS NOT NULL;
+
+DELETE FROM metadata WHERE key = 'sync_epoch';
+UPDATE metadata SET value = '0' WHERE key = 'sync_seq';

@@ -19,7 +19,7 @@ import { TaskInspector } from "./features/tasks/TaskInspector";
 import { TaskSection } from "./features/tasks/TaskSection";
 import { useTaskController } from "./features/tasks/useTaskController";
 import { loadPreferences, savePreferences } from "./lib/preferences";
-import { isInteractiveShortcutTarget, shortcutMatches } from "./lib/shortcuts";
+import { isInteractiveShortcutTarget, shortcutLabels, shortcutMatches } from "./lib/shortcuts";
 import { startRealtimeWake } from "./lib/realtimeWake";
 import {
   emptySyncSettings,
@@ -30,7 +30,7 @@ import {
 import { isTauriRuntime, taskClient } from "./lib/taskClient";
 import { completedTasks, reorderAnchors, searchTasks, tasksForBucket } from "./lib/taskOrdering";
 import { applyTheme, themeById } from "./lib/themes";
-import type { AppPreferences, Bucket, Task, ThemeId, View } from "./lib/types";
+import type { AppPreferences, Bucket, ShortcutAction, Task, ThemeId, View } from "./lib/types";
 
 function formatHeaderDate(): string {
   return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
@@ -38,6 +38,8 @@ function formatHeaderDate(): string {
 
 const shortcutWarningKey = "todou.quick-entry-shortcut-warning.v1";
 const inProgressTaskLimit = 3;
+type TaskShortcutAction = Extract<ShortcutAction, "complete" | "moveToday" | "moveInbox" | "togglePriority" | "toggleArea" | "delete">;
+type ShortcutTip = { action: TaskShortcutAction; label: string };
 
 function viewTitle(view: View): { title: string; subtitle?: string; icon: typeof Sparkles } {
   if (view === "today") return { title: "Today", subtitle: formatHeaderDate(), icon: CalendarDays };
@@ -72,6 +74,7 @@ export default function App() {
   const [logbookQuery, setLogbookQuery] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [shortcutTip, setShortcutTip] = useState<ShortcutTip | null>(null);
   const [shortcutWarning, setShortcutWarning] = useState<string | null>(() => localStorage.getItem(shortcutWarningKey));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>(emptySyncSettings);
@@ -79,8 +82,10 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("not-connected");
   const [buildingInstaller, setBuildingInstaller] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchReturnViewRef = useRef<View>("home");
   const noticeTimerRef = useRef<number | null>(null);
   const selectionVersionRef = useRef(0);
+  const shortcutTipTimerRef = useRef<number | null>(null);
 
   const selectTask = useCallback((id: string | null) => {
     selectionVersionRef.current += 1;
@@ -178,8 +183,18 @@ export default function App() {
     }, 4_500);
   }, []);
 
+  const showShortcutTip = useCallback((action: TaskShortcutAction, label = shortcutLabels[action]) => {
+    if (shortcutTipTimerRef.current) window.clearTimeout(shortcutTipTimerRef.current);
+    setShortcutTip({ action, label });
+    shortcutTipTimerRef.current = window.setTimeout(() => {
+      shortcutTipTimerRef.current = null;
+      setShortcutTip(null);
+    }, 4_500);
+  }, []);
+
   useEffect(() => () => {
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    if (shortcutTipTimerRef.current) window.clearTimeout(shortcutTipTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -207,10 +222,11 @@ export default function App() {
   }, []);
 
   const navigate = useCallback((next: View) => {
+    if (next === "search" && view !== "search") searchReturnViewRef.current = view;
     setView(next);
     setComposerBucket(null);
     if (next === "search") window.setTimeout(() => searchInputRef.current?.focus(), 0);
-  }, []);
+  }, [view]);
 
   const openComposer = useCallback((bucket?: Bucket) => {
     const defaultBucket = bucket ?? (view === "inbox" ? "inbox" : view === "today" || view === "home" ? "today" : "inbox");
@@ -290,10 +306,29 @@ export default function App() {
     }
   }, [buildingInstaller, showNotice]);
 
+  const completeTask = useCallback((id: string) => {
+    void controller.completeTask(id);
+    showShortcutTip("complete");
+  }, [controller.completeTask, showShortcutTip]);
+
+  const restoreTask = useCallback((id: string) => {
+    void controller.restoreTask(id);
+    showShortcutTip("complete", "Restore selected task");
+  }, [controller.restoreTask, showShortcutTip]);
+
+  const moveTask = useCallback((id: string, bucket: Bucket) => {
+    const task = controller.tasks.find((candidate) => candidate.id === id);
+    if (!task || task.bucket === bucket) return;
+    void controller.moveTask(id, bucket);
+    if (bucket === "today") showShortcutTip("moveToday");
+    if (bucket === "inbox") showShortcutTip("moveInbox");
+  }, [controller.moveTask, controller.tasks, showShortcutTip]);
+
   const deleteTask = useCallback((id: string) => {
     void controller.deleteTask(id);
+    showShortcutTip("delete");
     if (selectedTaskId === id) selectTask(null);
-  }, [controller.deleteTask, selectedTaskId, selectTask]);
+  }, [controller.deleteTask, selectedTaskId, selectTask, showShortcutTip]);
 
   const reorderTask = useCallback((movingId: string, targetId: string, edge: "before" | "after") => {
     const anchors = reorderAnchors(controller.tasks, movingId, targetId, edge);
@@ -325,11 +360,11 @@ export default function App() {
         rejectTaskDrop(target.bucket);
         return;
       }
-      void controller.moveTask(moving.id, target.bucket);
+      moveTask(moving.id, target.bucket);
       return;
     }
     reorderTask(moving.id, target.id, edge);
-  }, [canDropTaskIntoBucket, controller.tasks, controller.moveTask, rejectTaskDrop, reorderTask]);
+  }, [canDropTaskIntoBucket, controller.tasks, moveTask, rejectTaskDrop, reorderTask]);
 
   const dropTaskIntoBucket = useCallback((movingId: string, bucket: Bucket) => {
     const moving = controller.tasks.find(({ id, completedAt, deletedAt }) => id === movingId && !completedAt && !deletedAt);
@@ -338,12 +373,18 @@ export default function App() {
       rejectTaskDrop(bucket);
       return;
     }
-    void controller.moveTask(moving.id, bucket);
-  }, [canDropTaskIntoBucket, controller.tasks, controller.moveTask, rejectTaskDrop]);
+    moveTask(moving.id, bucket);
+  }, [canDropTaskIntoBucket, controller.tasks, moveTask, rejectTaskDrop]);
 
   const togglePriority = useCallback((task: Task) => {
     void controller.updateTask(task.id, { priority: task.priority === "high" ? "low" : "high" });
-  }, [controller.updateTask]);
+    showShortcutTip("togglePriority");
+  }, [controller.updateTask, showShortcutTip]);
+
+  const toggleArea = useCallback((task: Task) => {
+    void controller.updateTask(task.id, { area: task.area === "work" ? "personal" : "work" });
+    showShortcutTip("toggleArea");
+  }, [controller.updateTask, showShortcutTip]);
 
   const moveTaskAndSelectSourceNeighbor = useCallback((task: Task, bucket: Bucket) => {
     if (task.bucket === bucket) return;
@@ -376,6 +417,12 @@ export default function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       const isEditing = Boolean(target?.closest("input, select, textarea, [contenteditable]:not([contenteditable='false'])"));
+      if (paletteOpen) return;
+      if (event.key === "Escape" && view === "search") {
+        event.preventDefault();
+        navigate(searchReturnViewRef.current);
+        return;
+      }
       if (shortcutMatches(event, preferences.shortcuts.commandPalette)) {
         event.preventDefault();
         openPalette("commands");
@@ -386,7 +433,7 @@ export default function App() {
         navigate("search");
         return;
       }
-      if (paletteOpen || isEditing) return;
+      if (isEditing) return;
       const isUnmodifiedSpace = shortcutMatches(event, "Space");
       const canUseAmbientSpace = !selectedTask && !isInteractiveShortcutTarget(event.target);
       if (shortcutMatches(event, preferences.shortcuts.newTask)) {
@@ -449,15 +496,16 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [preferences.shortcuts, paletteOpen, selectedTask, selectedTaskId, visibleTasks, controller, openComposer, openPalette, navigate, togglePriority, moveTaskAndSelectSourceNeighbor, deleteTask, selectTask]);
+  }, [preferences.shortcuts, paletteOpen, view, selectedTask, selectedTaskId, visibleTasks, controller, openComposer, openPalette, navigate, togglePriority, moveTaskAndSelectSourceNeighbor, deleteTask, selectTask]);
 
   const sectionProps = {
     selectedTaskId,
     onSelect: selectTask,
-    onComplete: (id: string) => void controller.completeTask(id),
-    onRestore: (id: string) => void controller.restoreTask(id),
-    onMove: (id: string, bucket: Bucket) => void controller.moveTask(id, bucket),
+    onComplete: completeTask,
+    onRestore: restoreTask,
+    onMove: moveTask,
     onTogglePriority: togglePriority,
+    onToggleArea: toggleArea,
     onDelete: deleteTask,
     onDropTask: dropTaskOnRow,
     onDropIntoBucket: dropTaskIntoBucket,
@@ -466,6 +514,7 @@ export default function App() {
     draggedTaskId,
     onTaskDragStart: (id: string) => setDraggedTaskId(id),
     onTaskDragEnd: () => setDraggedTaskId(null),
+    shortcuts: preferences.shortcuts,
   };
 
   const composer = (bucket: Bucket) => composerBucket === bucket ? (
@@ -550,18 +599,23 @@ export default function App() {
         <TaskInspector
           task={selectedTask}
           onClose={() => selectTask(null)}
-          onUpdate={(patch) => controller.updateTask(selectedTask.id, patch)}
+          onUpdate={(patch) => {
+            if (patch.priority !== undefined) showShortcutTip("togglePriority");
+            if (patch.area !== undefined) showShortcutTip("toggleArea");
+            return controller.updateTask(selectedTask.id, patch);
+          }}
           onMove={(bucket) => {
             if (!canDropTaskIntoBucket(selectedTask.id, bucket)) {
               rejectTaskDrop(bucket);
-              return Promise.resolve(selectedTask);
+              return;
             }
-            return controller.moveTask(selectedTask.id, bucket);
+            moveTask(selectedTask.id, bucket);
           }}
           inProgressFull={inProgressTasks.length >= inProgressTaskLimit}
-          onComplete={() => void controller.completeTask(selectedTask.id)}
-          onRestore={() => void controller.restoreTask(selectedTask.id)}
+          onComplete={() => completeTask(selectedTask.id)}
+          onRestore={() => restoreTask(selectedTask.id)}
           onDelete={() => deleteTask(selectedTask.id)}
+          completeShortcut={preferences.shortcuts.complete}
         />
       ) : <InspectorPlaceholder />}
 
@@ -576,11 +630,11 @@ export default function App() {
         {...(import.meta.env.DEV && isTauriRuntime() ? { onBuildInstaller: () => void buildProductionApp() } : {})}
         selectedTask={selectedTask}
         canUndo={Boolean(controller.undo)}
-        onCompleteSelected={() => { if (selectedTask) void controller.completeTask(selectedTask.id); }}
-        onRestoreSelected={() => { if (selectedTask) void controller.restoreTask(selectedTask.id); }}
-        onMoveSelected={(bucket) => { if (selectedTask) void controller.moveTask(selectedTask.id, bucket); }}
+        onCompleteSelected={() => { if (selectedTask) completeTask(selectedTask.id); }}
+        onRestoreSelected={() => { if (selectedTask) restoreTask(selectedTask.id); }}
+        onMoveSelected={(bucket) => { if (selectedTask) moveTask(selectedTask.id, bucket); }}
         onTogglePrioritySelected={() => { if (selectedTask) togglePriority(selectedTask); }}
-        onToggleAreaSelected={() => { if (selectedTask) void controller.updateTask(selectedTask.id, { area: selectedTask.area === "work" ? "personal" : "work" }); }}
+        onToggleAreaSelected={() => { if (selectedTask) toggleArea(selectedTask); }}
         onDeleteSelected={() => { if (selectedTask) deleteTask(selectedTask.id); }}
         onUndo={() => void controller.runUndo()}
         committedTheme={preferences.themeId}
@@ -606,6 +660,13 @@ export default function App() {
           <span>{controller.undo.label}</span>
           <button onClick={() => void controller.runUndo()}>Undo <KeyHint shortcut={preferences.shortcuts.undo} /></button>
           <span className="undo-timer" />
+        </div>
+      )}
+      {shortcutTip && (
+        <div className={`shortcut-tip-toast ${controller.undo ? "has-undo" : ""}`} role="status">
+          <span>Next time, use</span>
+          <KeyHint shortcut={preferences.shortcuts[shortcutTip.action]} />
+          <span>to {shortcutTip.label.toLocaleLowerCase()}</span>
         </div>
       )}
       {notice && <div className="notice-toast" role="status">{notice}</div>}

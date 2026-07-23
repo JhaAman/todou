@@ -11,6 +11,7 @@ function task(overrides: Partial<Task> & Pick<Task, "id" | "title" | "bucket">):
   return {
     priority: "low",
     area: "work",
+    description: "",
     dueDate: null,
     estimateMinutes: null,
     orderKey: "000001",
@@ -244,8 +245,17 @@ describe("task drag and drop", () => {
       top: 0,
       height: 100,
     } as DOMRect);
+    const transfer = dataTransfer();
 
-    drag(taskRow("Too many"), destination, 75);
+    fireEvent.dragStart(taskRow("Too many"), { dataTransfer: transfer });
+    const getData = vi.spyOn(transfer, "getData").mockReturnValue("");
+    fireEvent.dragOver(destination, { clientY: 75, dataTransfer: transfer });
+
+    expect(destination).toHaveClass("is-task-drop-invalid");
+    expect(destination).not.toHaveClass("is-task-drop-target");
+
+    getData.mockRestore();
+    fireEvent.drop(destination, { clientY: 75, dataTransfer: transfer });
 
     expect(storedTask("inbox-task")).toMatchObject({ bucket: "inbox" });
     expect(moveTask).not.toHaveBeenCalled();
@@ -349,6 +359,24 @@ describe("new task keyboard shortcuts", () => {
     fireEvent.keyDown(document.body, { key: " ", code: "Space", ...init });
 
     expect(screen.queryByRole("form", { name: /Add task to/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("search navigation", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("returns to the previous view when Escape is pressed after opening search with Command-P", async () => {
+    await renderApp([
+      task({ id: "inbox-task", title: "Plan next week", bucket: "inbox" }),
+    ]);
+    fireEvent.click(within(screen.getByLabelText("Primary navigation")).getByRole("button", { name: /^Inbox/ }));
+
+    fireEvent.keyDown(document.body, { key: "p", metaKey: true });
+
+    const search = await screen.findByRole("textbox", { name: "Search" });
+    fireEvent.keyDown(search, { key: "Escape" });
+
+    expect(screen.getByRole("heading", { name: "Inbox" })).toBeInTheDocument();
   });
 });
 

@@ -11,7 +11,13 @@ import {
   type SyncSettings,
   type SyncStatus,
 } from "./syncSettings";
-import type { CreateTaskInput, EditableTaskPatch, Task, TaskFilter } from "./types";
+import {
+  taskDescriptionMaxLength,
+  type CreateTaskInput,
+  type EditableTaskPatch,
+  type Task,
+  type TaskFilter,
+} from "./types";
 
 export interface ExportResult {
   json?: string;
@@ -56,10 +62,23 @@ function localDateString(): string {
   return `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, "0")}-${`${date.getDate()}`.padStart(2, "0")}`;
 }
 
+function normalizeBrowserDescription(value: string): string {
+  const description = value.trim();
+  if (Array.from(description).length > taskDescriptionMaxLength) {
+    throw new Error(`Description must contain at most ${taskDescriptionMaxLength} characters`);
+  }
+  return description;
+}
+
 function readBrowserTasks(): Task[] {
   try {
     const existing = localStorage.getItem(browserStoreKey);
-    if (existing) return JSON.parse(existing) as Task[];
+    if (existing) {
+      return (JSON.parse(existing) as Task[]).map((task) => ({
+        ...task,
+        description: typeof task.description === "string" ? task.description : "",
+      }));
+    }
     if (!localStorage.getItem(browserSeedKey)) {
       const seeded = demoTasks();
       localStorage.setItem(browserSeedKey, "true");
@@ -125,6 +144,7 @@ function browserClient(): TaskClient {
       const task: Task = {
         id: crypto.randomUUID(),
         title: input.title.trim(),
+        description: "",
         bucket,
         priority,
         area: input.area ?? "work",
@@ -143,7 +163,15 @@ function browserClient(): TaskClient {
       const tasks = readBrowserTasks();
       const current = tasks.find((task) => task.id === id);
       if (!current) throw new Error("Task not found");
-      const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
+      const description = patch.description === undefined
+        ? undefined
+        : normalizeBrowserDescription(patch.description);
+      const next = {
+        ...current,
+        ...patch,
+        ...(description === undefined ? {} : { description }),
+        updatedAt: new Date().toISOString(),
+      };
       if (patch.dueDate && patch.dueDate <= localDateString() && current.bucket === "inbox") next.bucket = "today";
       if (patch.priority && patch.priority !== current.priority) {
         next.orderKey = nextOrderKey(tasks, next.bucket, patch.priority);

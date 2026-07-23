@@ -3,10 +3,12 @@ import type { OpenCodeThemeFamilyId, OpenCodeThemeMode } from "./opencodeThemePa
 export type Bucket = "in_progress" | "today" | "inbox";
 export type Priority = "high" | "low";
 export type Area = "personal" | "work";
+export const taskDescriptionMaxLength = 10_000;
 
 export interface Task {
   id: string;
   title: string;
+  description: string;
   bucket: Bucket;
   priority: Priority;
   area: Area;
@@ -29,7 +31,7 @@ export interface CreateTaskInput {
 }
 
 export type EditableTaskPatch = Partial<
-  Pick<Task, "title" | "priority" | "area" | "dueDate" | "estimateMinutes">
+  Pick<Task, "title" | "description" | "priority" | "area" | "dueDate" | "estimateMinutes">
 >;
 
 export type TaskFilter = {

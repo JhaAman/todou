@@ -11,6 +11,26 @@ Todou is a local-first, keyboard-driven task manager for macOS. Every action com
 - A local MCP server that reads and changes the same SQLite-backed task service.
 - Local Supabase schema, idempotent merge RPCs, ordered change feed, bootstrap, and pgTAP contract tests.
 
+## Install the production app
+
+On an Apple-silicon Mac with the Xcode command-line tools, Bun 1.3.14+, and Rust 1.85+ installed, copy this one command:
+
+```sh
+git clone https://github.com/JhaAman/todou.git && cd todou && ./scripts/install-macos-app.sh
+```
+
+It builds and installs the production app in `~/Applications/Todou.app`, opens it, and configures Git so future worktrees install dependencies automatically. It does not start the development server or local Supabase. To update the installed app later, run these commands from the clone:
+
+```sh
+git switch main
+git pull --ff-only
+./scripts/install-macos-app.sh
+```
+
+On first launch, open `Cmd+K` → **Connection settings** and enter the hosted project URL and publishable key. Never use a service-role key or put either value in Git.
+
+> **Security:** the current hosted sync schema has no per-user authorization. Do not use it for sensitive data or share its connection details until authentication and owner-scoped access controls are added.
+
 ## Develop
 
 Requirements: Apple-silicon macOS, Bun 1.3.14+, Rust 1.85+, Docker Desktop, and the Xcode command-line tools.

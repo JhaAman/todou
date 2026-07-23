@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(21);
+select plan(25);
 
 create function pg_temp.task_registers(p_title text, p_stamp text, p_bucket text)
 returns jsonb
@@ -30,6 +30,7 @@ from public.apply_task_mutation(
   1,
   jsonb_build_object(
     'title', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'Review launch plan'),
+    'description', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'https://example.com/launch'),
     'schedule', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', jsonb_build_object('bucket', 'inbox', 'due_date', null)),
     'priority', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'low'),
     'area', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'work'),
@@ -47,6 +48,12 @@ select is(
 );
 
 select is(
+  (select snapshot ->> 'description' from first_apply),
+  'https://example.com/launch',
+  'a description register is stored in the remote snapshot'
+);
+
+select is(
   (select seq from first_apply),
   1::bigint,
   'the transactional feed starts at one'
@@ -60,6 +67,7 @@ from public.apply_task_mutation(
   1,
   jsonb_build_object(
     'title', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'Review launch plan'),
+    'description', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'https://example.com/launch'),
     'schedule', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', jsonb_build_object('bucket', 'inbox', 'due_date', null)),
     'priority', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'low'),
     'area', jsonb_build_object('stamp', '0000000001000-000000-device-a', 'value', 'work'),
@@ -87,6 +95,34 @@ select throws_ok(
   '22023',
   'idempotency_mismatch',
   'reusing a mutation UUID for a different payload is rejected'
+);
+
+select throws_ok(
+  $$
+    select * from public.apply_task_mutation(
+      '10000000-0000-4000-8000-000000000006',
+      '20000000-0000-4000-8000-000000000001',
+      1,
+      '{"description":{"stamp":"0000000004000-000000-device-a","value":"\nnotes"}}'::jsonb
+    )
+  $$,
+  '22023',
+  'invalid_description_register',
+  'descriptions with leading newline whitespace are rejected'
+);
+
+select throws_ok(
+  $$
+    select * from public.apply_task_mutation(
+      '10000000-0000-4000-8000-000000000007',
+      '20000000-0000-4000-8000-000000000001',
+      1,
+      '{"description":{"stamp":"0000000004000-000000-device-a","value":"\u3000notes"}}'::jsonb
+    )
+  $$,
+  '22023',
+  'invalid_description_register',
+  'descriptions with leading Unicode whitespace are rejected'
 );
 
 do $apply$
@@ -165,6 +201,12 @@ select is(
   (public.bootstrap_tasks() ->> 'watermark')::bigint,
   5::bigint,
   'bootstrap returns a watermark consistent with the feed head'
+);
+
+select is(
+  (public.bootstrap_tasks() ->> 'description_register')::boolean,
+  true,
+  'bootstrap advertises description register support'
 );
 
 select is(

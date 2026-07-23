@@ -97,6 +97,7 @@ describe("command palette", () => {
     const selectedTask: Task = {
       id: "task-1",
       title: "Ship the build",
+      description: "",
       bucket: "today",
       priority: "high",
       area: "work",
@@ -118,6 +119,7 @@ describe("command palette", () => {
     const selectedTask: Task = {
       id: "task-2",
       title: "Archived task",
+      description: "",
       bucket: "today",
       priority: "low",
       area: "personal",

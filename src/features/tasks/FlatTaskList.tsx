@@ -1,6 +1,6 @@
 import { Search } from "lucide-react";
 import type { RefObject } from "react";
-import type { Task } from "../../lib/types";
+import type { ShortcutAction, Task } from "../../lib/types";
 import { TaskRow } from "./TaskRow";
 
 interface FlatTaskListProps {
@@ -15,7 +15,9 @@ interface FlatTaskListProps {
   onRestore: (id: string) => void;
   onMove: (id: string, bucket: Task["bucket"]) => void;
   onTogglePriority: (task: Task) => void;
+  onToggleArea: (task: Task) => void;
   onDelete: (id: string) => void;
+  shortcuts: Record<ShortcutAction, string>;
 }
 
 export function FlatTaskList(props: FlatTaskListProps) {
@@ -53,8 +55,10 @@ export function FlatTaskList(props: FlatTaskListProps) {
               onRestore={() => props.onRestore(task.id)}
               onMove={(bucket) => props.onMove(task.id, bucket)}
               onTogglePriority={() => props.onTogglePriority(task)}
+              onToggleArea={() => props.onToggleArea(task)}
               onDelete={() => props.onDelete(task.id)}
               onDropTask={() => undefined}
+              shortcuts={props.shortcuts}
             />
           ))}
         </div>

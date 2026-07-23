@@ -1,6 +1,6 @@
 import { Plus } from "lucide-react";
 import { useEffect, useState, type DragEvent, type ReactNode } from "react";
-import type { Bucket, Task } from "../../lib/types";
+import type { Bucket, ShortcutAction, Task } from "../../lib/types";
 import { taskDragType, TaskRow } from "./TaskRow";
 
 interface TaskSectionProps {
@@ -16,6 +16,7 @@ interface TaskSectionProps {
   onRestore: (id: string) => void;
   onMove: (id: string, bucket: Task["bucket"]) => void;
   onTogglePriority: (task: Task) => void;
+  onToggleArea: (task: Task) => void;
   onDelete: (id: string) => void;
   onDropTask: (movingId: string, targetId: string, edge: "before" | "after") => void;
   onDropIntoBucket: (movingId: string, bucket: Bucket) => void;
@@ -24,6 +25,7 @@ interface TaskSectionProps {
   draggedTaskId?: string | null;
   onTaskDragStart?: (id: string) => void;
   onTaskDragEnd?: () => void;
+  shortcuts: Record<ShortcutAction, string>;
   children?: ReactNode;
 }
 
@@ -53,10 +55,15 @@ export function TaskSection(props: TaskSectionProps) {
       onRestore={() => props.onRestore(task.id)}
       onMove={(bucket) => props.onMove(task.id, bucket)}
       onTogglePriority={() => props.onTogglePriority(task)}
+      onToggleArea={() => props.onToggleArea(task)}
       onDelete={() => props.onDelete(task.id)}
       onDropTask={props.onDropTask}
+      canAcceptDrop={(movingId) => props.canAcceptDrop?.(movingId, props.bucket) ?? true}
+      onDropRejected={() => props.onDropRejected?.(props.bucket)}
+      draggedTaskId={props.draggedTaskId}
       onTaskDragStart={props.onTaskDragStart}
       onTaskDragEnd={props.onTaskDragEnd}
+      shortcuts={props.shortcuts}
     />
   ));
 
