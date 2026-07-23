@@ -336,6 +336,8 @@ fn build_and_open_dmg() -> AppResult<PathBuf> {
         .ok_or_else(|| AppError::storage("the project root is unavailable"))?;
     let build = Command::new("bun")
         .args(["run", "build"])
+        // Tauri skips its temporary Finder window in CI mode.
+        .env("CI", "true")
         .current_dir(project_root)
         .status()
         .map_err(|error| AppError::storage(format!("could not start Bun: {error}")))?;

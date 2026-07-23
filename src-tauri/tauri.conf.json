@@ -48,6 +48,7 @@
   "bundle": {
     "active": true,
     "targets": ["dmg"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
     "resources": {
       "../packages/mcp/dist/todou-mcp": "todou-mcp"
     },
