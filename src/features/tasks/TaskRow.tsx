@@ -4,6 +4,7 @@ import {
   Check,
   Clock3,
   CornerDownLeft,
+  FileText,
   Flag,
   GripVertical,
   Inbox,
@@ -92,6 +93,7 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
       <div className="task-copy">
         <div className="task-title-line">
           <span className="task-title">{task.title}</span>
+          {task.description.trim() && <FileText className="description-mark" size={12} role="img" aria-label="Has description" />}
           {task.priority === "high" && <Flag className="priority-mark" size={12} fill="currentColor" aria-label="High priority" />}
         </div>
         <div className="task-meta">

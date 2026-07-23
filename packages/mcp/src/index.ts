@@ -21,6 +21,7 @@ const estimateMinutes = z.number().int().min(1).max(1440);
 
 const taskClocks = z.object({
   title: z.string(),
+  description: z.string(),
   schedule: z.string(),
   priority: z.string(),
   area: z.string(),
@@ -33,6 +34,7 @@ const taskClocks = z.object({
 const task = z.object({
   id: taskId,
   title: z.string(),
+  description: z.string(),
   bucket,
   priority,
   area,
@@ -175,6 +177,7 @@ server.registerTool(
     inputSchema: {
       id: taskId,
       title: z.string().trim().min(1).max(500).optional(),
+      description: z.string().trim().max(10_000).optional(),
       priority: priority.optional(),
       area: area.optional(),
       dueDate: dueDate.nullable().optional(),

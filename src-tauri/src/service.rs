@@ -24,11 +24,14 @@ use std::{
 use uuid::Uuid;
 
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
+const MIGRATION_2: &str = include_str!("../migrations/0002_task_descriptions.sql");
 const TASK_COLUMNS: &str = "id, title, bucket, priority, area, due_date, estimate_minutes, \
     order_key, completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock, \
-    priority_clock, area_clock, estimate_clock, order_clock, completion_clock, deletion_clock";
-const REGISTER_NAMES: [&str; 8] = [
+    priority_clock, area_clock, estimate_clock, order_clock, completion_clock, deletion_clock, \
+    description, description_clock";
+const REGISTER_NAMES: [&str; 9] = [
     "title",
+    "description",
     "schedule",
     "priority",
     "area",
@@ -126,6 +129,7 @@ impl TaskService {
         let task = Task {
             id,
             title,
+            description: String::new(),
             bucket,
             priority: input.priority,
             area: input.area,
@@ -165,6 +169,13 @@ impl TaskService {
             if task.title != title {
                 task.title = title;
                 changed.insert("title");
+            }
+        }
+        if let Some(description) = patch.description {
+            let description = crate::domain::normalize_description(&description)?;
+            if task.description != description {
+                task.description = description;
+                changed.insert("description");
             }
         }
         if let Some(priority) = patch.priority {
@@ -1005,7 +1016,7 @@ enum MergeOutcome {
 }
 
 fn run_migrations(connection: &mut Connection, now_ms: i64) -> AppResult<()> {
-    let applied = connection
+    let has_migrations = connection
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
             [],
@@ -1014,35 +1025,47 @@ fn run_migrations(connection: &mut Connection, now_ms: i64) -> AppResult<()> {
         .optional()
         .map_err(AppError::from)?
         .is_some();
-    if applied {
-        let version: i64 = connection
+    let version = if has_migrations {
+        connection
             .query_row(
                 "SELECT coalesce(max(version), 0) FROM schema_migrations",
                 [],
                 |row| row.get(0),
             )
-            .map_err(AppError::from)?;
-        if version > 1 {
-            return Err(AppError::new(
-                ErrorCode::ProtocolMismatch,
-                "local database was created by a newer Todou version",
-            ));
-        }
-        if version == 1 {
-            return Ok(());
-        }
+            .map_err(AppError::from)?
+    } else {
+        0
+    };
+    if version > 2 {
+        return Err(AppError::new(
+            ErrorCode::ProtocolMismatch,
+            "local database was created by a newer Todou version",
+        ));
     }
 
     let transaction = connection.transaction().map_err(AppError::from)?;
-    transaction
-        .execute_batch(MIGRATION_1)
-        .map_err(AppError::from)?;
-    transaction
-        .execute(
-            "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?1)",
-            [hlc::timestamp(now_ms)?],
-        )
-        .map_err(AppError::from)?;
+    if version < 1 {
+        transaction
+            .execute_batch(MIGRATION_1)
+            .map_err(AppError::from)?;
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?1)",
+                [hlc::timestamp(now_ms)?],
+            )
+            .map_err(AppError::from)?;
+    }
+    if version < 2 {
+        transaction
+            .execute_batch(MIGRATION_2)
+            .map_err(AppError::from)?;
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?1)",
+                [hlc::timestamp(now_ms)?],
+            )
+            .map_err(AppError::from)?;
+    }
     transaction.commit().map_err(AppError::from)?;
     Ok(())
 }
@@ -1218,6 +1241,7 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<Task> {
     Ok(Task {
         id: row.get(0)?,
         title: row.get(1)?,
+        description: row.get(20)?,
         bucket,
         priority,
         area,
@@ -1237,6 +1261,7 @@ fn row_to_task(row: &Row<'_>) -> rusqlite::Result<Task> {
             order: row.get(17)?,
             completion: row.get(18)?,
             deletion: row.get(19)?,
+            description: row.get(21)?,
         },
     })
 }
@@ -1302,10 +1327,10 @@ fn insert_task(transaction: &Transaction<'_>, task: &Task) -> AppResult<()> {
                 id, title, bucket, priority, area, due_date, estimate_minutes, order_key,
                 completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock,
                 priority_clock, area_clock, estimate_clock, order_clock, completion_clock,
-                deletion_clock
+                deletion_clock, description, description_clock
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
             )",
             task_params(task),
         )
@@ -1321,7 +1346,8 @@ fn update_task_row(transaction: &Transaction<'_>, task: &Task) -> AppResult<()> 
                 estimate_minutes = ?7, order_key = ?8, completed_at = ?9, deleted_at = ?10,
                 created_at = ?11, updated_at = ?12, title_clock = ?13, schedule_clock = ?14,
                 priority_clock = ?15, area_clock = ?16, estimate_clock = ?17, order_clock = ?18,
-                completion_clock = ?19, deletion_clock = ?20
+                completion_clock = ?19, deletion_clock = ?20, description = ?21,
+                description_clock = ?22
              WHERE id = ?1",
             task_params(task),
         )
@@ -1334,7 +1360,7 @@ fn update_task_row(transaction: &Transaction<'_>, task: &Task) -> AppResult<()> 
     Ok(())
 }
 
-fn task_params(task: &Task) -> [rusqlite::types::Value; 20] {
+fn task_params(task: &Task) -> [rusqlite::types::Value; 22] {
     use rusqlite::types::Value as SqlValue;
     [
         SqlValue::Text(task.id.clone()),
@@ -1362,6 +1388,8 @@ fn task_params(task: &Task) -> [rusqlite::types::Value; 20] {
         SqlValue::Text(task.clocks.order.clone()),
         SqlValue::Text(task.clocks.completion.clone()),
         SqlValue::Text(task.clocks.deletion.clone()),
+        SqlValue::Text(task.description.clone()),
+        SqlValue::Text(task.clocks.description.clone()),
     ]
 }
 
@@ -1441,6 +1469,7 @@ fn apply_clock(clocks: &mut TaskClocks, changed: &BTreeSet<&str>, stamp: &str) {
     for name in changed {
         match *name {
             "title" => clocks.title = stamp.to_owned(),
+            "description" => clocks.description = stamp.to_owned(),
             "schedule" => clocks.schedule = stamp.to_owned(),
             "priority" => clocks.priority = stamp.to_owned(),
             "area" => clocks.area = stamp.to_owned(),
@@ -1488,6 +1517,7 @@ fn register_map(task: &Task, names: &[&str]) -> AppResult<RegisterMap> {
     for name in names {
         let (stamp, value) = match *name {
             "title" => (&task.clocks.title, json!(task.title)),
+            "description" => (&task.clocks.description, json!(task.description)),
             "schedule" => (
                 &task.clocks.schedule,
                 json!({ "bucket": task.bucket, "due_date": task.due_date }),
@@ -1535,6 +1565,17 @@ fn merge_remote_task(transaction: &Transaction<'_>, remote: &Task) -> AppResult<
     if remote.clocks.title > local.clocks.title {
         local.title = remote.title.clone();
         local.clocks.title = remote.clocks.title.clone();
+    }
+    merge_register(
+        "description",
+        &local.clocks.description,
+        &remote.clocks.description,
+        &local.description,
+        &remote.description,
+    )?;
+    if remote.clocks.description > local.clocks.description {
+        local.description = remote.description.clone();
+        local.clocks.description = remote.clocks.description.clone();
     }
     merge_register(
         "schedule",
@@ -1648,6 +1689,11 @@ fn locally_newer_registers(local: &Task, remote: &Task) -> Vec<&'static str> {
             "title",
             local.clocks.title.as_str(),
             remote.clocks.title.as_str(),
+        ),
+        (
+            "description",
+            local.clocks.description.as_str(),
+            remote.clocks.description.as_str(),
         ),
         (
             "schedule",

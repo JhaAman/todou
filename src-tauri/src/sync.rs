@@ -237,6 +237,11 @@ impl SupabaseTransport {
 
     async fn bootstrap(&self) -> Result<BootstrapPayload, SyncFailure> {
         let row: BootstrapRow = self.rpc("bootstrap_tasks", &json!({})).await?;
+        if !row.description_register {
+            return Err(SyncFailure::retryable(
+                "Supabase task descriptions migration is not installed",
+            ));
+        }
         let mut tasks = Vec::with_capacity(row.tasks.len());
         for task in row.tasks {
             tasks.push(task.into_task()?);
@@ -303,6 +308,7 @@ impl SupabaseTransport {
 #[derive(Debug, Deserialize)]
 struct BootstrapRow {
     protocol_version: u32,
+    description_register: bool,
     epoch: String,
     watermark: u64,
     tasks: Vec<RemoteTaskRow>,
@@ -318,6 +324,7 @@ struct RemoteHead {
 struct RemoteTaskRow {
     id: String,
     title: String,
+    description: String,
     bucket: Bucket,
     priority: Priority,
     area: Area,
@@ -329,6 +336,7 @@ struct RemoteTaskRow {
     created_at: String,
     updated_at: String,
     title_clock: String,
+    description_clock: String,
     schedule_clock: String,
     priority_clock: String,
     area_clock: String,
@@ -367,6 +375,7 @@ impl RemoteTaskRow {
         let task = Task {
             id: self.id,
             title: self.title,
+            description: self.description,
             bucket: self.bucket,
             priority: self.priority,
             area: self.area,
@@ -379,6 +388,7 @@ impl RemoteTaskRow {
             updated_at,
             clocks: TaskClocks {
                 title: self.title_clock,
+                description: self.description_clock,
                 schedule: self.schedule_clock,
                 priority: self.priority_clock,
                 area: self.area_clock,
@@ -416,6 +426,7 @@ fn classify_http_failure(status: StatusCode, body: &str) -> SyncFailure {
         "idempotency_mismatch",
         "invalid_registers",
         "invalid_title_register",
+        "invalid_description_register",
         "invalid_schedule_register",
         "invalid_priority_register",
         "invalid_area_register",
@@ -503,6 +514,17 @@ async fn reconcile(
     };
     publish_sync_status(app, wake, SyncStatus::Updating);
     let transport = SupabaseTransport::new(client.clone(), config);
+    if service
+        .cursor()
+        .map_err(|error| SyncFailure::retryable(error.to_string()))?
+        .epoch
+        .is_none()
+    {
+        // Bootstrap before push so a newer task schema is never acknowledged by an older server.
+        if bootstrap(app, service, &transport).await? > 0 {
+            wake.wake();
+        }
+    }
 
     let mut pushed = 0_usize;
     'push: while pushed < MAX_PUSHES_PER_CYCLE {
@@ -654,8 +676,8 @@ async fn bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_http_failure, FailureKind, RemoteTaskRow, SupabaseConfig, SupabaseTransport,
-        SyncWake,
+        classify_http_failure, BootstrapRow, FailureKind, RemoteTaskRow, SupabaseConfig,
+        SupabaseTransport, SyncWake,
     };
     use crate::{
         domain::{Area, Bucket, CreateTaskInput, Priority, TaskFilter, UpdateTaskPatch},
@@ -718,6 +740,7 @@ mod tests {
         let remote = RemoteTaskRow {
             id: completed.id.clone(),
             title: completed.title.clone(),
+            description: completed.description.clone(),
             bucket: completed.bucket,
             priority: completed.priority,
             area: completed.area,
@@ -732,6 +755,7 @@ mod tests {
             created_at: postgres_utc_spelling(&completed.created_at, omit_zero_fraction),
             updated_at: postgres_utc_spelling(&completed.updated_at, omit_zero_fraction),
             title_clock: completed.clocks.title.clone(),
+            description_clock: completed.clocks.description.clone(),
             schedule_clock: completed.clocks.schedule.clone(),
             priority_clock: completed.clocks.priority.clone(),
             area_clock: completed.clocks.area.clone(),
@@ -816,6 +840,7 @@ mod tests {
             r#"{
               "id":"40f18880-af35-4d55-b10c-ea7d50fe626f",
               "title":"Synced",
+              "description":"https://example.com/brief",
               "bucket":"inbox",
               "priority":"low",
               "area":"work",
@@ -827,6 +852,7 @@ mod tests {
               "created_at":"2026-07-20T20:00:00.000Z",
               "updated_at":"2026-07-20T20:00:00.000Z",
               "title_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "description_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "schedule_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "priority_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "area_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -840,7 +866,20 @@ mod tests {
 
         let task = row.into_task().unwrap();
         assert_eq!(task.estimate_minutes, Some(25));
+        assert_eq!(task.description, "https://example.com/brief");
         assert_eq!(task.clocks.title, task.clocks.deletion);
+    }
+
+    #[test]
+    fn bootstrap_response_requires_description_register_capability() {
+        let response = r#"{
+          "protocol_version": 1,
+          "epoch": "40f18880-af35-4d55-b10c-ea7d50fe626f",
+          "watermark": 0,
+          "tasks": []
+        }"#;
+
+        assert!(serde_json::from_str::<BootstrapRow>(response).is_err());
     }
 
     #[test]
