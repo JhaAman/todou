@@ -30,10 +30,12 @@ bun run mcp:build
 ```
 
 The MCP Unix-socket tests need permission to bind a temporary socket; a restricted sandbox can fail them with `EPERM` even when the implementation is correct.
+The Tauri dev hook builds `packages/mcp/dist/todou-mcp` before starting Vite because Tauri validates bundle resources in dev mode.
+The dev-app production build sets `CI=true` so Tauri skips its temporary Finder-based DMG styling pass; regular `bun run build` keeps the styled DMG.
 
 ## Change guidance
 
 - Keep the package versions exact. Before installing or upgrading any package, verify that release is at least 48 hours old.
 - Preserve app identifier `com.magicproduct.todou`; it determines both the native data directory and MCP socket path.
 - Test domain behavior through the real temporary SQLite service and Supabase RPCs. Do not mock away transactions, HLC merge, cursor movement, or idempotency.
-- Keep sync state out of the primary UI. Diagnostics may be exposed only through Settings/commands.
+- Keep detailed sync diagnostics out of the primary UI. The sidebar may show compact connection health; counts and errors belong in Settings/commands.

@@ -291,6 +291,11 @@ pub fn wake_sync(wake: State<'_, SyncWake>) -> u64 {
 }
 
 #[tauri::command]
+pub fn sync_status(wake: State<'_, SyncWake>) -> &'static str {
+    wake.status()
+}
+
+#[tauri::command]
 pub fn show_quick_entry(app: AppHandle) -> AppResult<()> {
     lifecycle::show_quick_entry(&app)
 }
@@ -336,6 +341,8 @@ fn build_and_open_dmg() -> AppResult<PathBuf> {
         .ok_or_else(|| AppError::storage("the project root is unavailable"))?;
     let build = Command::new("bun")
         .args(["run", "build"])
+        // Tauri skips its temporary Finder window in CI mode.
+        .env("CI", "true")
         .current_dir(project_root)
         .status()
         .map_err(|error| AppError::storage(format!("could not start Bun: {error}")))?;

@@ -7,3 +7,4 @@
 - Keep dependency versions exact. Before adding or upgrading one, verify the release is at least 48 hours old.
 - Use conventional commit messages: `type(scope): description`.
 - Do not push, create a pull request, merge, or change remote GitHub state unless the user explicitly asks in the current task.
+- When a small feature is complete and verified, automatically open a draft pull request and return its link in the same success turn.

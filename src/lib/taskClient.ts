@@ -9,6 +9,7 @@ import {
   type SyncConnectionCheck,
   type SyncDiagnostics,
   type SyncSettings,
+  type SyncStatus,
 } from "./syncSettings";
 import type { CreateTaskInput, EditableTaskPatch, Task, TaskFilter } from "./types";
 
@@ -33,6 +34,8 @@ export interface TaskClient {
   testSyncConnection(settings: SyncSettings): Promise<SyncConnectionCheck>;
   getSyncDiagnostics(): Promise<SyncDiagnostics>;
   wakeSync(): Promise<void>;
+  getSyncStatus(): Promise<SyncStatus>;
+  subscribeSyncStatus(listener: (status: SyncStatus) => void): Promise<() => void>;
   registerQuickEntryShortcut(shortcut: string): Promise<void>;
   subscribe(listener: () => void): Promise<() => void>;
   hideCurrentWindow(): Promise<void>;
@@ -214,6 +217,13 @@ function browserClient(): TaskClient {
       return { runtime: "browser", syncAvailable: false };
     },
     async wakeSync() {},
+    async getSyncStatus() {
+      return "not-connected";
+    },
+    async subscribeSyncStatus(listener) {
+      listener("not-connected");
+      return () => undefined;
+    },
     async registerQuickEntryShortcut() {},
     async subscribe(listener) {
       const localListener = () => listener();
@@ -295,6 +305,11 @@ function tauriClient(): TaskClient {
     },
     async wakeSync() {
       await invoke<number>("wake_sync");
+    },
+    getSyncStatus: () => invoke<SyncStatus>("sync_status"),
+    async subscribeSyncStatus(listener) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<SyncStatus>("todou://sync-status", (event) => listener(event.payload));
     },
     async registerQuickEntryShortcut(shortcut) {
       await invoke<void>("register_quick_entry_shortcut", { accelerator: shortcut });

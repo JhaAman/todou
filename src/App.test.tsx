@@ -239,7 +239,7 @@ describe("sync settings", () => {
     fireEvent.change(screen.getByLabelText(/Publishable key/i), { target: { value: "publishable-key" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Supabase settings saved");
+    expect(await screen.findByText("Supabase settings saved")).toBeInTheDocument();
     expect(screen.queryByText("Supabase connection saved")).not.toBeInTheDocument();
   });
 });

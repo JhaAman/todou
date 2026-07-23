@@ -21,7 +21,12 @@ import { useTaskController } from "./features/tasks/useTaskController";
 import { loadPreferences, savePreferences } from "./lib/preferences";
 import { isInteractiveShortcutTarget, shortcutMatches } from "./lib/shortcuts";
 import { startRealtimeWake } from "./lib/realtimeWake";
-import { emptySyncSettings, toNativeShortcut, type SyncSettings } from "./lib/syncSettings";
+import {
+  emptySyncSettings,
+  toNativeShortcut,
+  type SyncSettings,
+  type SyncStatus,
+} from "./lib/syncSettings";
 import { isTauriRuntime, taskClient } from "./lib/taskClient";
 import { completedTasks, reorderAnchors, searchTasks, tasksForBucket } from "./lib/taskOrdering";
 import { applyTheme, themeById } from "./lib/themes";
@@ -69,6 +74,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>(emptySyncSettings);
   const [syncSettingsLoaded, setSyncSettingsLoaded] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("not-connected");
   const [buildingInstaller, setBuildingInstaller] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const noticeTimerRef = useRef<number | null>(null);
@@ -115,6 +121,38 @@ export default function App() {
     return () => {
       cancelled = true;
       if (disconnect) void disconnect();
+    };
+  }, [syncSettings, syncSettingsLoaded]);
+
+  useEffect(() => {
+    if (!syncSettingsLoaded) return;
+    let disposed = false;
+    let statusEventReceived = false;
+    let disconnect: (() => void) | undefined;
+    setSyncStatus(syncSettings.url ? "updating" : "not-connected");
+
+    void (async () => {
+      try {
+        const cleanup = await taskClient.subscribeSyncStatus((status) => {
+          if (disposed) return;
+          statusEventReceived = true;
+          setSyncStatus(status);
+        });
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        disconnect = cleanup;
+        const status = await taskClient.getSyncStatus();
+        if (!disposed && !statusEventReceived) setSyncStatus(status);
+      } catch {
+        if (!disposed) setSyncStatus("not-connected");
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      disconnect?.();
     };
   }, [syncSettings, syncSettingsLoaded]);
 
@@ -394,6 +432,7 @@ export default function App() {
         theme={themeById(previewTheme)}
         newTaskShortcut={preferences.shortcuts.newTask}
         commandPaletteShortcut={preferences.shortcuts.commandPalette}
+        syncStatus={syncStatus}
       />
 
       <main className="workspace">
