@@ -4,27 +4,74 @@ import { defaultShortcuts } from "../../lib/shortcuts";
 import type { Task } from "../../lib/types";
 import { TaskRow } from "./TaskRow";
 
-const task: Task = {
-  id: "task-1",
-  title: "Plan the release",
-  bucket: "today",
-  priority: "low",
-  area: "work",
-  dueDate: null,
-  estimateMinutes: null,
-  orderKey: "V",
-  completedAt: null,
-  deletedAt: null,
-  createdAt: "2026-07-20T20:00:00.000Z",
-  updatedAt: "2026-07-20T20:00:00.000Z",
-};
+function task(description: string): Task {
+  return {
+    id: "task-1",
+    title: "Review the brief",
+    description,
+    bucket: "today",
+    priority: "low",
+    area: "work",
+    dueDate: null,
+    estimateMinutes: null,
+    orderKey: "V",
+    completedAt: null,
+    deletedAt: null,
+    createdAt: "2026-07-20T20:00:00.000Z",
+    updatedAt: "2026-07-20T20:00:00.000Z",
+  };
+}
+
+function renderRow(description: string) {
+  return render(
+    <TaskRow
+      task={task(description)}
+      selected={false}
+      shortcuts={defaultShortcuts}
+      onSelect={vi.fn()}
+      onComplete={vi.fn()}
+      onRestore={vi.fn()}
+      onMove={vi.fn()}
+      onTogglePriority={vi.fn()}
+      onToggleArea={vi.fn()}
+      onDelete={vi.fn()}
+      onDropTask={vi.fn()}
+    />,
+  );
+}
+
+describe("task row", () => {
+  it("shows a description indicator only when the description contains text", () => {
+    const { rerender } = renderRow("https://example.com/brief");
+
+    expect(screen.getByRole("img", { name: "Has description" })).toBeInTheDocument();
+
+    rerender(
+      <TaskRow
+        task={task("  \n  ")}
+        selected={false}
+        shortcuts={defaultShortcuts}
+        onSelect={vi.fn()}
+        onComplete={vi.fn()}
+        onRestore={vi.fn()}
+        onMove={vi.fn()}
+        onTogglePriority={vi.fn()}
+        onToggleArea={vi.fn()}
+        onDelete={vi.fn()}
+        onDropTask={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("img", { name: "Has description" })).not.toBeInTheDocument();
+  });
+});
 
 describe("task context menu", () => {
   it("offers available task actions with the saved shortcut and performs the chosen action", () => {
     const onMove = vi.fn();
     render(
       <TaskRow
-        task={task}
+        task={{ ...task(""), title: "Plan the release" }}
         selected={false}
         shortcuts={{ ...defaultShortcuts, moveInbox: "Ctrl+Shift+I" }}
         onSelect={vi.fn()}

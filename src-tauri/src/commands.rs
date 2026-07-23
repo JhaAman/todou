@@ -397,6 +397,7 @@ mod tests {
             tasks: vec![ExportTask {
                 id: "task-1".to_owned(),
                 title: "Plan the week".to_owned(),
+                description: "Review the project brief".to_owned(),
                 bucket: Bucket::Today,
                 priority: crate::domain::Priority::High,
                 area: crate::domain::Area::Work,

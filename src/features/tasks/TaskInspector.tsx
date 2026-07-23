@@ -3,6 +3,7 @@ import {
   CalendarDays,
   Check,
   Clock3,
+  FileText,
   Flag,
   Inbox,
   RotateCcw,
@@ -12,7 +13,7 @@ import {
 } from "lucide-react";
 import { KeyHint } from "../../components/KeyHint";
 import { formatEstimate, parseEstimate } from "../../lib/naturalLanguage";
-import type { EditableTaskPatch, Task } from "../../lib/types";
+import { taskDescriptionMaxLength, type EditableTaskPatch, type Task } from "../../lib/types";
 
 interface TaskInspectorProps {
   task: Task;
@@ -27,19 +28,27 @@ interface TaskInspectorProps {
 
 export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onRestore, onDelete, completeShortcut }: TaskInspectorProps) {
   const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description);
   const [estimate, setEstimate] = useState(formatEstimate(task.estimateMinutes));
   const [estimateError, setEstimateError] = useState(false);
 
   useEffect(() => {
     setTitle(task.title);
+    setDescription(task.description);
     setEstimate(formatEstimate(task.estimateMinutes));
     setEstimateError(false);
-  }, [task.id, task.title, task.estimateMinutes]);
+  }, [task.id, task.title, task.description, task.estimateMinutes]);
 
   const saveTitle = () => {
     const next = title.trim();
     if (!next) setTitle(task.title);
     else if (next !== task.title) void onUpdate({ title: next });
+  };
+
+  const saveDescription = () => {
+    const next = description.trim();
+    if (next !== description) setDescription(next);
+    if (next !== task.description) void onUpdate({ description: next });
   };
 
   const saveEstimate = () => {
@@ -85,6 +94,19 @@ export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onR
             aria-label="Task title"
           />
         </div>
+        <label className="inspector-description-editor">
+          <span className="inspector-description-label"><FileText size={14} />Description</span>
+          <textarea
+            className="inspector-description"
+            rows={4}
+            maxLength={taskDescriptionMaxLength}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            onBlur={saveDescription}
+            placeholder="Add notes, links, or details…"
+            aria-label="Description"
+          />
+        </label>
         {task.completedAt && <div className="inspector-status-row"><span className="status-pill complete"><span />Completed</span></div>}
 
         <div className="inspector-divider" />

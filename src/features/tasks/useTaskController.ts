@@ -70,6 +70,7 @@ export function useTaskController(client: TaskClient = taskClient) {
     const optimistic: Task = {
       id: temporaryId,
       title: input.title.trim(),
+      description: "",
       bucket: input.bucket ?? "inbox",
       priority: input.priority ?? "low",
       area: input.area ?? "work",

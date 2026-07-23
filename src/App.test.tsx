@@ -11,6 +11,7 @@ function task(overrides: Partial<Task> & Pick<Task, "id" | "title" | "bucket">):
   return {
     priority: "low",
     area: "work",
+    description: "",
     dueDate: null,
     estimateMinutes: null,
     orderKey: "000001",

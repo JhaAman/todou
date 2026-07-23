@@ -592,6 +592,7 @@ kbd {
 .task-copy { min-width: 0; flex: 1; }
 .task-title-line { display: flex; align-items: center; gap: 7px; }
 .task-title { overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 590; letter-spacing: -0.005em; text-overflow: ellipsis; white-space: nowrap; }
+.description-mark { flex: none; color: var(--text-meta); }
 .priority-mark { flex: none; color: color-mix(in srgb, var(--accent) 75%, var(--text)); }
 .task-meta { display: flex; height: 18px; align-items: center; gap: 8px; margin-top: 3px; color: var(--text-meta); font-size: 9.5px; }
 .area-label {
@@ -775,6 +776,26 @@ kbd {
   user-select: text;
 }
 .inspector-title:hover { background: color-mix(in srgb, var(--surface-hover) 40%, transparent); border-radius: 6px; }
+.inspector-description-editor { display: grid; gap: 7px; margin: 8px 0 0 6px; }
+.inspector-description-label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-meta); font-size: 10px; font-weight: 650; }
+.inspector-description {
+  width: 100%;
+  min-height: 86px;
+  resize: vertical;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  outline: 0;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-raised) 55%, transparent);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  user-select: text;
+}
+.inspector-description:hover,
+.inspector-description:focus { border-color: var(--border); background: var(--surface-raised); }
+.inspector-description::placeholder { color: var(--text-muted); }
 .inspector-status-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 3px 0 6px; }
 .status-pill { display: inline-flex; height: 20px; align-items: center; gap: 5px; padding: 0 7px; border: 1px solid var(--border); border-radius: 99px; color: var(--text-meta); font-size: 9px; }
 .status-pill > span { width: 5px; height: 5px; border-radius: 50%; background: var(--area-work-mark); }

@@ -18,6 +18,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-launch",
       title: "Review the launch brief",
+      description: "",
       bucket: "today",
       priority: "high",
       area: "work",
@@ -32,6 +33,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-dentist",
       title: "Book a dentist appointment",
+      description: "",
       bucket: "today",
       priority: "high",
       area: "personal",
@@ -46,6 +48,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-feedback",
       title: "Reply to design feedback",
+      description: "",
       bucket: "today",
       priority: "low",
       area: "work",
@@ -60,6 +63,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-groceries",
       title: "Pick up groceries on the way home",
+      description: "",
       bucket: "today",
       priority: "low",
       area: "personal",
@@ -74,6 +78,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-goals",
       title: "Outline quarterly goals",
+      description: "",
       bucket: "inbox",
       priority: "high",
       area: "work",
@@ -88,6 +93,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-hike",
       title: "Plan the weekend hike",
+      description: "",
       bucket: "inbox",
       priority: "low",
       area: "personal",
@@ -102,6 +108,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-expenses",
       title: "Submit travel expenses",
+      description: "",
       bucket: "inbox",
       priority: "low",
       area: "work",
@@ -116,6 +123,7 @@ export function demoTasks(): Task[] {
     {
       id: "demo-complete",
       title: "Send weekly update",
+      description: "",
       bucket: "today",
       priority: "low",
       area: "work",

@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use rusqlite::{params, Connection};
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -75,7 +76,124 @@ fn local_task_and_outbox_survive_restart() {
     assert_eq!(tasks.revision, created.revision);
     assert_eq!(outbox.result.len(), 1);
     assert_eq!(outbox.result[0].task_id, created.result.id);
-    assert_eq!(outbox.result[0].registers.len(), 8);
+    assert_eq!(outbox.result[0].registers.len(), 9);
+}
+
+#[test]
+fn v1_database_migrates_descriptions_and_resets_the_sync_cursor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("todou.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0001_initial.sql"))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?1)",
+            ["2026-07-20T00:00:00.000Z"],
+        )
+        .unwrap();
+    let existing_id = Uuid::new_v4().to_string();
+    let clock = "0000000000000-0000000000-00000000000000000000000000000000";
+    connection
+        .execute(
+            "INSERT INTO tasks (
+                id, title, bucket, priority, area, due_date, estimate_minutes, order_key,
+                completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock,
+                priority_clock, area_clock, estimate_clock, order_clock, completion_clock,
+                deletion_clock
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+            )",
+            params![
+                existing_id,
+                "Migrated existing task",
+                "inbox",
+                "low",
+                "personal",
+                Option::<String>::None,
+                Option::<i64>::None,
+                "V",
+                Option::<String>::None,
+                Option::<String>::None,
+                "2026-07-20T00:00:00.000Z",
+                "2026-07-20T00:00:00.000Z",
+                clock,
+                clock,
+                clock,
+                clock,
+                clock,
+                clock,
+                clock,
+                clock,
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO metadata(key, value) VALUES ('sync_epoch', ?1)",
+            [epoch()],
+        )
+        .unwrap();
+    connection
+        .execute("UPDATE metadata SET value = '4' WHERE key = 'sync_seq'", [])
+        .unwrap();
+    drop(connection);
+
+    let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    let task = service.get_task(&existing_id).unwrap().result;
+
+    assert_eq!(task.description, "");
+    assert_eq!(task.clocks.description, clock);
+    task.validate().unwrap();
+    assert_eq!(service.cursor().unwrap().epoch, None);
+    assert_eq!(service.cursor().unwrap().sequence, 0);
+}
+
+#[test]
+fn description_edits_are_persisted() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("todou.sqlite3");
+    let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    let created = service.create_task(input("Keep notes")).unwrap().result;
+    let patch: UpdateTaskPatch = serde_json::from_value(json!({
+        "description": "  https://example.com/brief  "
+    }))
+    .unwrap();
+
+    service.update_task(&created.id, patch).unwrap();
+    drop(service);
+
+    let reopened = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    let updated = reopened.get_task(&created.id).unwrap().result;
+
+    assert_eq!(updated.description, "https://example.com/brief");
+}
+
+#[test]
+fn description_edits_queue_only_the_description_register() {
+    let service = service();
+    let created = service.create_task(input("Keep notes")).unwrap().result;
+    let mut create_operations = service.next_outbox(1).unwrap().result;
+    let create_operation = create_operations.remove(0);
+    service
+        .ack_outbox(&create_operation.operation_id, created.clone())
+        .unwrap();
+    let patch: UpdateTaskPatch = serde_json::from_value(json!({
+        "description": "https://example.com/brief"
+    }))
+    .unwrap();
+
+    service.update_task(&created.id, patch).unwrap();
+    let mut operations = service.next_outbox(1).unwrap().result;
+    let operation = operations.remove(0);
+
+    assert_eq!(operation.registers.len(), 1);
+    assert_eq!(
+        operation.registers["description"].value,
+        json!("https://example.com/brief")
+    );
 }
 
 #[test]
@@ -371,13 +489,10 @@ fn two_devices_merge_different_fields_without_losing_either_edit() {
         )
         .unwrap()
         .result;
-    let area_edit = second
+    let description_edit = second
         .update_task(
             &initial.id,
-            UpdateTaskPatch {
-                area: Some(Area::Work),
-                ..UpdateTaskPatch::default()
-            },
+            serde_json::from_value(json!({ "description": "https://example.com/brief" })).unwrap(),
         )
         .unwrap()
         .result;
@@ -388,7 +503,7 @@ fn two_devices_merge_different_fields_without_losing_either_edit() {
             epoch: epoch.clone(),
             changes: vec![RemoteChange {
                 seq: 1,
-                task: area_edit.clone(),
+                task: description_edit.clone(),
             }],
         })
         .unwrap();
@@ -406,7 +521,7 @@ fn two_devices_merge_different_fields_without_losing_either_edit() {
     let on_first = first.get_task(&initial.id).unwrap().result;
     let on_second = second.get_task(&initial.id).unwrap().result;
     assert_eq!(on_first.title, "Edited title");
-    assert_eq!(on_first.area, Area::Work);
+    assert_eq!(on_first.description, "https://example.com/brief");
     assert_eq!(on_first, on_second);
 }
 

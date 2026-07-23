@@ -1,0 +1,8 @@
+ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''
+    CHECK (length(description) <= 10000);
+
+ALTER TABLE tasks ADD COLUMN description_clock TEXT COLLATE BINARY NOT NULL
+    DEFAULT '0000000000000-0000000000-00000000000000000000000000000000';
+
+DELETE FROM metadata WHERE key = 'sync_epoch';
+UPDATE metadata SET value = '0' WHERE key = 'sync_seq';

@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, str::FromStr};
 
 pub const PROTOCOL_VERSION: u32 = 1;
+pub const DESCRIPTION_MAX_LENGTH: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +122,7 @@ impl FromStr for Area {
 #[serde(rename_all = "camelCase")]
 pub struct TaskClocks {
     pub title: String,
+    pub description: String,
     pub schedule: String,
     pub priority: String,
     pub area: String,
@@ -134,6 +136,7 @@ impl TaskClocks {
     pub fn all(stamp: String) -> Self {
         Self {
             title: stamp.clone(),
+            description: stamp.clone(),
             schedule: stamp.clone(),
             priority: stamp.clone(),
             area: stamp.clone(),
@@ -144,9 +147,10 @@ impl TaskClocks {
         }
     }
 
-    pub fn stamps(&self) -> [&str; 8] {
+    pub fn stamps(&self) -> [&str; 9] {
         [
             &self.title,
+            &self.description,
             &self.schedule,
             &self.priority,
             &self.area,
@@ -163,6 +167,7 @@ impl TaskClocks {
 pub struct Task {
     pub id: String,
     pub title: String,
+    pub description: String,
     pub bucket: Bucket,
     pub priority: Priority,
     pub area: Area,
@@ -179,6 +184,7 @@ pub struct Task {
 impl Task {
     pub fn validate(&self) -> AppResult<()> {
         validate_title(&self.title)?;
+        validate_description(&self.description)?;
         validate_due_date(self.due_date.as_deref())?;
         validate_estimate(self.estimate_minutes)?;
         validate_timestamp(&self.created_at, "createdAt")?;
@@ -237,6 +243,8 @@ pub struct UpdateTaskPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub area: Option<Area>,
@@ -257,6 +265,8 @@ impl<'de> Deserialize<'de> for UpdateTaskPatch {
             #[serde(default)]
             title: Option<String>,
             #[serde(default)]
+            description: Option<String>,
+            #[serde(default)]
             priority: Option<Priority>,
             #[serde(default)]
             area: Option<Area>,
@@ -269,6 +279,7 @@ impl<'de> Deserialize<'de> for UpdateTaskPatch {
         let raw = RawPatch::deserialize(deserializer)?;
         Ok(Self {
             title: raw.title,
+            description: raw.description,
             priority: raw.priority,
             area: raw.area,
             due_date: raw.due_date,
@@ -402,6 +413,7 @@ pub struct SyncCursor {
 pub struct ExportTask {
     pub id: String,
     pub title: String,
+    pub description: String,
     pub bucket: Bucket,
     pub priority: Priority,
     pub area: Area,
@@ -418,6 +430,7 @@ impl From<Task> for ExportTask {
         Self {
             id: task.id,
             title: task.title,
+            description: task.description,
             bucket: task.bucket,
             priority: task.priority,
             area: task.area,
@@ -446,12 +459,27 @@ pub fn normalize_title(value: &str) -> AppResult<String> {
     Ok(title.to_owned())
 }
 
+pub fn normalize_description(value: &str) -> AppResult<String> {
+    let description = value.trim();
+    validate_description(description)?;
+    Ok(description.to_owned())
+}
+
 pub fn validate_title(value: &str) -> AppResult<()> {
     let length = value.chars().count();
     if value.trim() != value || !(1..=500).contains(&length) {
         return Err(AppError::invalid_input(
             "title must be trimmed and contain between 1 and 500 characters",
         ));
+    }
+    Ok(())
+}
+
+pub fn validate_description(value: &str) -> AppResult<()> {
+    if value.trim() != value || value.chars().count() > DESCRIPTION_MAX_LENGTH {
+        return Err(AppError::invalid_input(format!(
+            "description must be trimmed and contain at most {DESCRIPTION_MAX_LENGTH} characters"
+        )));
     }
     Ok(())
 }

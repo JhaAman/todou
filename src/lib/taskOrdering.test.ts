@@ -6,6 +6,7 @@ function task(overrides: Partial<Task> = {}): Task {
   return {
     id: "task-1",
     title: "Write launch notes",
+    description: "",
     bucket: "today",
     priority: "low",
     area: "work",
