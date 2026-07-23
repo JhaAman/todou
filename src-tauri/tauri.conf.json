@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.magicproduct.todou",
   "build": {
-    "beforeDevCommand": "bun run dev:web",
+    "beforeDevCommand": "bun run mcp:build && bun run dev:web",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "bun run build:bundle-assets",
     "frontendDist": "../dist"
