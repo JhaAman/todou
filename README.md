@@ -19,10 +19,12 @@ On an Apple-silicon Mac with the Xcode command-line tools, Bun 1.3.14+, and Rust
 git clone https://github.com/JhaAman/todou.git && cd todou && ./scripts/install-macos-app.sh
 ```
 
-It builds and installs the production app in `~/Applications/Todou.app`, opens it, and configures Git so future worktrees install dependencies automatically. It does not start the development server or local Supabase. To update the installed app later, run this from the clone:
+It builds and installs the production app in `~/Applications/Todou.app`, opens it, and configures Git so future worktrees install dependencies automatically. It does not start the development server or local Supabase. To update the installed app later, run these commands from the clone:
 
 ```sh
-git pull --ff-only && ./scripts/install-macos-app.sh
+git switch main
+git pull --ff-only
+./scripts/install-macos-app.sh
 ```
 
 On first launch, open `Cmd+K` → **Connection settings** and enter the hosted project URL and publishable key. Never use a service-role key or put either value in Git.
