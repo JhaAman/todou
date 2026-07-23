@@ -291,6 +291,11 @@ pub fn wake_sync(wake: State<'_, SyncWake>) -> u64 {
 }
 
 #[tauri::command]
+pub fn sync_status(wake: State<'_, SyncWake>) -> &'static str {
+    wake.status()
+}
+
+#[tauri::command]
 pub fn show_quick_entry(app: AppHandle) -> AppResult<()> {
     lifecycle::show_quick_entry(&app)
 }
