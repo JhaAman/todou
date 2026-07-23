@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::{
     env, fmt,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -26,6 +26,40 @@ const MAX_PUSHES_PER_CYCLE: usize = 1_000;
 const PULL_BATCH: u32 = 200;
 const MAX_PULL_PAGES_PER_CYCLE: usize = 50;
 
+#[derive(Clone, Copy, Serialize)]
+#[repr(u8)]
+#[serde(rename_all = "kebab-case")]
+enum SyncStatus {
+    NotConnected = 0,
+    Updating = 1,
+    UpToDate = 2,
+}
+
+impl SyncStatus {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Updating,
+            2 => Self::UpToDate,
+            _ => Self::NotConnected,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::UpToDate => "up-to-date",
+            Self::Updating => "updating",
+            Self::NotConnected => "not-connected",
+        }
+    }
+}
+
+fn publish_sync_status(app: &AppHandle, wake: &SyncWake, status: SyncStatus) {
+    wake.set_status(status);
+    if let Err(error) = app.emit("todou://sync-status", status) {
+        tracing::warn!(%error, "could not emit sync status");
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct SyncWake {
     inner: Arc<WakeInner>,
@@ -34,6 +68,7 @@ pub struct SyncWake {
 #[derive(Default)]
 struct WakeInner {
     generation: AtomicU64,
+    status: AtomicU8,
     notify: Notify,
 }
 
@@ -46,6 +81,14 @@ impl SyncWake {
 
     pub fn generation(&self) -> u64 {
         self.inner.generation.load(Ordering::Acquire)
+    }
+
+    pub fn status(&self) -> &'static str {
+        SyncStatus::from_u8(self.inner.status.load(Ordering::Acquire)).as_str()
+    }
+
+    fn set_status(&self, status: SyncStatus) {
+        self.inner.status.store(status as u8, Ordering::Release);
     }
 
     pub async fn changed_after(&self, generation: u64) -> u64 {
@@ -397,6 +440,7 @@ pub fn spawn_worker(app: AppHandle, service: TaskService, wake: SyncWake) {
         let client = match Client::builder().timeout(Duration::from_secs(20)).build() {
             Ok(client) => client,
             Err(error) => {
+                publish_sync_status(&app, &wake, SyncStatus::NotConnected);
                 tracing::error!(%error, "could not create Supabase HTTP client");
                 return;
             }
@@ -414,8 +458,17 @@ pub fn spawn_worker(app: AppHandle, service: TaskService, wake: SyncWake) {
             }
             let result = reconcile(&client, &app, &service, &wake).await;
             let wait = match result {
-                Ok(()) => {
+                Ok(configured) => {
                     failures = 0;
+                    publish_sync_status(
+                        &app,
+                        &wake,
+                        if configured {
+                            SyncStatus::UpToDate
+                        } else {
+                            SyncStatus::NotConnected
+                        },
+                    );
                     Duration::from_secs(30)
                 }
                 Err(error) => {
@@ -423,6 +476,7 @@ pub fn spawn_worker(app: AppHandle, service: TaskService, wake: SyncWake) {
                     if let Err(storage_error) = service.mark_sync_failure(&error.message) {
                         tracing::warn!(%storage_error, "could not persist sync failure");
                     }
+                    publish_sync_status(&app, &wake, SyncStatus::NotConnected);
                     tracing::warn!(%error, kind = ?error.kind, "sync cycle failed");
                     Duration::from_secs((1_u64 << failures.min(8)).min(300))
                 }
@@ -440,13 +494,14 @@ async fn reconcile(
     app: &AppHandle,
     service: &TaskService,
     wake: &SyncWake,
-) -> Result<(), SyncFailure> {
+) -> Result<bool, SyncFailure> {
     let Some(config) = SupabaseConfig::load(service)? else {
         service
             .clear_sync_failure()
             .map_err(|error| SyncFailure::retryable(error.to_string()))?;
-        return Ok(());
+        return Ok(false);
     };
+    publish_sync_status(app, wake, SyncStatus::Updating);
     let transport = SupabaseTransport::new(client.clone(), config);
 
     let mut pushed = 0_usize;
@@ -522,7 +577,7 @@ async fn reconcile(
         service
             .mark_sync_success()
             .map_err(|error| SyncFailure::permanent(error.to_string()))?;
-        return Ok(());
+        return Ok(true);
     };
     let head = transport.head().await?;
     if head.epoch != epoch || head.last_seq < cursor.sequence {
@@ -532,7 +587,7 @@ async fn reconcile(
         service
             .mark_sync_success()
             .map_err(|error| SyncFailure::permanent(error.to_string()))?;
-        return Ok(());
+        return Ok(true);
     }
     let mut after = cursor.sequence;
     for _ in 0..MAX_PULL_PAGES_PER_CYCLE {
@@ -545,7 +600,7 @@ async fn reconcile(
                 service
                     .mark_sync_success()
                     .map_err(|storage| SyncFailure::permanent(storage.to_string()))?;
-                return Ok(());
+                return Ok(true);
             }
             Err(error) => return Err(error),
         };
@@ -572,7 +627,7 @@ async fn reconcile(
     service
         .mark_sync_success()
         .map_err(|error| SyncFailure::permanent(error.to_string()))?;
-    Ok(())
+    Ok(true)
 }
 
 async fn bootstrap(

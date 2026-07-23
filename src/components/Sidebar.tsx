@@ -9,7 +9,9 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type DragEvent } from "react";
 import { KeyHint } from "./KeyHint";
+import { SyncStatusBar } from "./SyncStatusBar";
 import type { ThemeDefinition } from "../lib/themes";
+import type { SyncStatus } from "../lib/syncSettings";
 import type { Bucket, View } from "../lib/types";
 
 interface SidebarProps {
@@ -24,6 +26,7 @@ interface SidebarProps {
   theme: ThemeDefinition;
   newTaskShortcut: string;
   commandPaletteShortcut: string;
+  syncStatus: SyncStatus;
 }
 
 const navigation = [
@@ -45,6 +48,7 @@ export function Sidebar({
   theme,
   newTaskShortcut,
   commandPaletteShortcut,
+  syncStatus,
 }: SidebarProps) {
   const [dropTarget, setDropTarget] = useState<Bucket | null>(null);
 
@@ -114,6 +118,8 @@ export function Sidebar({
           );
         })}
       </nav>
+
+      <SyncStatusBar status={syncStatus} />
 
       <div className="sidebar-bottom">
         <button className="sidebar-tool theme-tool" onClick={onOpenThemes} aria-label={`Theme: ${theme.name}`} title={`Theme: ${theme.name}`}>

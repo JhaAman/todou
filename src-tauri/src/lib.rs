@@ -98,6 +98,7 @@ pub fn run() {
             commands::apply_remote_page,
             commands::bootstrap_remote,
             commands::sync_diagnostics,
+            commands::sync_status,
             commands::wake_sync,
             commands::show_quick_entry,
             commands::hide_quick_entry,

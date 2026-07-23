@@ -3,6 +3,8 @@ export interface SyncSettings {
   publishableKey: string;
 }
 
+export type SyncStatus = "up-to-date" | "updating" | "not-connected";
+
 export interface SyncConnectionCheck {
   target: "local" | "hosted";
   protocolVersion: number;

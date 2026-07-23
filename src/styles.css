@@ -311,8 +311,37 @@ kbd {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
-  margin-top: auto;
   padding: 8px;
+}
+
+.sync-status-bar {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  padding: 8px 14px 3px;
+  color: var(--text-meta);
+  font-size: 10px;
+}
+
+.sync-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #55c57a;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #55c57a 14%, transparent);
+}
+
+.sync-status-bar.is-updating .sync-status-dot {
+  background: var(--orange);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--orange) 14%, transparent);
+}
+
+.sync-status-bar.is-not-connected .sync-status-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
 .sidebar-tool {

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+const { invoke, listen } = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
 afterEach(() => {
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   invoke.mockReset();
+  listen.mockReset();
   vi.resetModules();
 });
 
@@ -40,6 +42,40 @@ describe("sync diagnostics client", () => {
       lastError: "Remote request timed out",
     });
     expect(invoke).toHaveBeenCalledWith("sync_diagnostics", undefined);
+  });
+
+  it("reports browser preview as not connected", async () => {
+    const { taskClient } = await import("./taskClient");
+    const listener = vi.fn();
+
+    await taskClient.subscribeSyncStatus(listener);
+
+    expect(listener).toHaveBeenCalledWith("not-connected");
+  });
+
+  it("subscribes to native sync worker status events", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    listen.mockImplementation(async (_event, listener) => {
+      listener({ payload: "up-to-date" });
+      return vi.fn();
+    });
+    const { taskClient } = await import("./taskClient");
+    const listener = vi.fn();
+
+    await taskClient.subscribeSyncStatus(listener);
+
+    expect(listen).toHaveBeenCalledWith("todou://sync-status", expect.any(Function));
+    expect(listener).toHaveBeenCalledWith("up-to-date");
+  });
+
+  it("reads the native worker status after subscribing", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    invoke.mockResolvedValue("updating");
+    const { taskClient } = await import("./taskClient");
+
+    await expect(taskClient.getSyncStatus()).resolves.toBe("updating");
+
+    expect(invoke).toHaveBeenCalledWith("sync_status", undefined);
   });
 
   it("saves native sync settings atomically with one command", async () => {
