@@ -25,6 +25,7 @@ const PUSH_BATCH: u32 = 100;
 const MAX_PUSHES_PER_CYCLE: usize = 1_000;
 const PULL_BATCH: u32 = 200;
 const MAX_PULL_PAGES_PER_CYCLE: usize = 50;
+const LEGACY_IN_PROGRESS_PROTOCOL: &str = "legacy_in_progress_protocol";
 
 #[derive(Clone, Copy, Serialize)]
 #[repr(u8)]
@@ -217,7 +218,7 @@ impl SupabaseTransport {
             .await?;
         let mut changes = Vec::with_capacity(rows.len());
         for row in rows {
-            if row.protocol_version != PROTOCOL_VERSION {
+            if !(1..=PROTOCOL_VERSION).contains(&row.protocol_version) {
                 return Err(SyncFailure::permanent(format!(
                     "unsupported remote protocol version {}",
                     row.protocol_version
@@ -413,6 +414,7 @@ fn classify_http_failure(status: StatusCode, body: &str) -> SyncFailure {
         .unwrap_or_else(|| format!("Supabase returned HTTP {status}"));
     let deterministic_rejection = [
         "protocol_mismatch",
+        LEGACY_IN_PROGRESS_PROTOCOL,
         "idempotency_mismatch",
         "invalid_registers",
         "invalid_title_register",
@@ -433,6 +435,12 @@ fn classify_http_failure(status: StatusCode, body: &str) -> SyncFailure {
     } else {
         SyncFailure::retryable(message)
     }
+}
+
+fn should_promote_legacy_outbox_mutation(mutation: &OutboxMutation, error: &SyncFailure) -> bool {
+    mutation.protocol_version == 1
+        && error.kind == FailureKind::Permanent
+        && error.message == LEGACY_IN_PROGRESS_PROTOCOL
 }
 
 pub fn spawn_worker(app: AppHandle, service: TaskService, wake: SyncWake) {
@@ -543,6 +551,15 @@ async fn reconcile(
                         return Err(SyncFailure::retryable(error.to_string()));
                     }
                 },
+                Err(error) if should_promote_legacy_outbox_mutation(&mutation, &error) => {
+                    service
+                        .promote_legacy_outbox_mutation(&mutation.operation_id)
+                        .map_err(|storage| SyncFailure::permanent(storage.to_string()))?;
+                    tracing::info!(
+                        operation_id = %mutation.operation_id,
+                        "retrying a legacy mutation with protocol 2"
+                    );
+                }
                 Err(error) if error.kind == FailureKind::Permanent => {
                     service
                         .record_outbox_failure(&mutation.operation_id, &error.message, false)
@@ -654,17 +671,19 @@ async fn bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_http_failure, FailureKind, RemoteTaskRow, SupabaseConfig, SupabaseTransport,
-        SyncWake,
+        classify_http_failure, should_promote_legacy_outbox_mutation, FailureKind, RemoteTaskRow,
+        SupabaseConfig, SupabaseTransport, SyncWake,
     };
     use crate::{
-        domain::{Area, Bucket, CreateTaskInput, Priority, TaskFilter, UpdateTaskPatch},
+        domain::{
+            Area, Bucket, CreateTaskInput, OutboxMutation, Priority, TaskFilter, UpdateTaskPatch,
+        },
         hlc::ClockSource,
         service::TaskService,
     };
     use chrono::NaiveDate;
     use reqwest::StatusCode;
-    use std::{env, sync::Arc};
+    use std::{collections::BTreeMap, env, sync::Arc};
     use tempfile::tempdir;
 
     struct FixedClock {
@@ -808,6 +827,34 @@ mod tests {
         );
 
         assert_eq!(error.kind, FailureKind::Permanent);
+    }
+
+    #[test]
+    fn legacy_in_progress_protocol_rejection_promotes_only_v1_mutations() {
+        let error = classify_http_failure(
+            StatusCode::BAD_REQUEST,
+            r#"{"message":"legacy_in_progress_protocol"}"#,
+        );
+        let mutation = OutboxMutation {
+            protocol_version: 1,
+            local_sequence: 1,
+            operation_id: "10000000-0000-4000-8000-000000000001".into(),
+            device_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            task_id: "20000000-0000-4000-8000-000000000001".into(),
+            registers: BTreeMap::new(),
+            created_at: "2026-07-20T00:00:00.000Z".into(),
+            attempt_count: 0,
+            next_attempt_at: "2026-07-20T00:00:00.000Z".into(),
+        };
+
+        assert!(should_promote_legacy_outbox_mutation(&mutation, &error));
+        assert!(!should_promote_legacy_outbox_mutation(
+            &OutboxMutation {
+                protocol_version: 2,
+                ..mutation
+            },
+            &error,
+        ));
     }
 
     #[test]

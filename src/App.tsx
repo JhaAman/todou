@@ -37,6 +37,7 @@ function formatHeaderDate(): string {
 }
 
 const shortcutWarningKey = "todou.quick-entry-shortcut-warning.v1";
+const inProgressTaskLimit = 3;
 
 function viewTitle(view: View): { title: string; subtitle?: string; icon: typeof Sparkles } {
   if (view === "today") return { title: "Today", subtitle: formatHeaderDate(), icon: CalendarDays };
@@ -70,6 +71,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [logbookQuery, setLogbookQuery] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [shortcutWarning, setShortcutWarning] = useState<string | null>(() => localStorage.getItem(shortcutWarningKey));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>(emptySyncSettings);
@@ -78,7 +80,14 @@ export default function App() {
   const [buildingInstaller, setBuildingInstaller] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const selectionVersionRef = useRef(0);
 
+  const selectTask = useCallback((id: string | null) => {
+    selectionVersionRef.current += 1;
+    setSelectedTaskId(id);
+  }, []);
+
+  const inProgressTasks = useMemo(() => tasksForBucket(controller.tasks, "in_progress"), [controller.tasks]);
   const todayTasks = useMemo(() => tasksForBucket(controller.tasks, "today"), [controller.tasks]);
   const inboxTasks = useMemo(() => tasksForBucket(controller.tasks, "inbox"), [controller.tasks]);
   const logbookTasks = useMemo(() => {
@@ -157,8 +166,8 @@ export default function App() {
   }, [syncSettings, syncSettingsLoaded]);
 
   useEffect(() => {
-    if (selectedTaskId && !selectedTask) setSelectedTaskId(null);
-  }, [selectedTask, selectedTaskId]);
+    if (selectedTaskId && !selectedTask) selectTask(null);
+  }, [selectedTask, selectedTaskId, selectTask]);
 
   const showNotice = useCallback((message: string) => {
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
@@ -171,6 +180,16 @@ export default function App() {
 
   useEffect(() => () => {
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const clearDraggedTask = () => setDraggedTaskId(null);
+    window.addEventListener("dragend", clearDraggedTask);
+    window.addEventListener("drop", clearDraggedTask, true);
+    return () => {
+      window.removeEventListener("dragend", clearDraggedTask);
+      window.removeEventListener("drop", clearDraggedTask, true);
+    };
   }, []);
 
   useEffect(() => {
@@ -273,8 +292,8 @@ export default function App() {
 
   const deleteTask = useCallback((id: string) => {
     void controller.deleteTask(id);
-    if (selectedTaskId === id) setSelectedTaskId(null);
-  }, [controller.deleteTask, selectedTaskId]);
+    if (selectedTaskId === id) selectTask(null);
+  }, [controller.deleteTask, selectedTaskId, selectTask]);
 
   const reorderTask = useCallback((movingId: string, targetId: string, edge: "before" | "after") => {
     const anchors = reorderAnchors(controller.tasks, movingId, targetId, edge);
@@ -285,33 +304,73 @@ export default function App() {
     void controller.reorderTask(movingId, anchors.beforeId, anchors.afterId);
   }, [controller.tasks, controller.reorderTask, showNotice]);
 
+  const canDropTaskIntoBucket = useCallback((movingId: string, bucket: Bucket) => {
+    const moving = controller.tasks.find(({ id, completedAt, deletedAt }) => id === movingId && !completedAt && !deletedAt);
+    if (!moving) return false;
+    return bucket !== "in_progress"
+      || moving.bucket === bucket
+      || inProgressTasks.length < inProgressTaskLimit;
+  }, [controller.tasks, inProgressTasks.length]);
+
+  const rejectTaskDrop = useCallback((bucket: Bucket) => {
+    if (bucket === "in_progress") showNotice("In Progress is full — finish or move a task first");
+  }, [showNotice]);
+
   const dropTaskOnRow = useCallback((movingId: string, targetId: string, edge: "before" | "after") => {
     const moving = controller.tasks.find(({ id, completedAt, deletedAt }) => id === movingId && !completedAt && !deletedAt);
     const target = controller.tasks.find(({ id, completedAt, deletedAt }) => id === targetId && !completedAt && !deletedAt);
     if (!moving || !target) return;
     if (moving.bucket !== target.bucket) {
+      if (!canDropTaskIntoBucket(moving.id, target.bucket)) {
+        rejectTaskDrop(target.bucket);
+        return;
+      }
       void controller.moveTask(moving.id, target.bucket);
       return;
     }
     reorderTask(moving.id, target.id, edge);
-  }, [controller.tasks, controller.moveTask, reorderTask]);
+  }, [canDropTaskIntoBucket, controller.tasks, controller.moveTask, rejectTaskDrop, reorderTask]);
 
   const dropTaskIntoBucket = useCallback((movingId: string, bucket: Bucket) => {
     const moving = controller.tasks.find(({ id, completedAt, deletedAt }) => id === movingId && !completedAt && !deletedAt);
-    if (moving && moving.bucket !== bucket) void controller.moveTask(moving.id, bucket);
-  }, [controller.tasks, controller.moveTask]);
+    if (!moving || moving.bucket === bucket) return;
+    if (!canDropTaskIntoBucket(moving.id, bucket)) {
+      rejectTaskDrop(bucket);
+      return;
+    }
+    void controller.moveTask(moving.id, bucket);
+  }, [canDropTaskIntoBucket, controller.tasks, controller.moveTask, rejectTaskDrop]);
 
   const togglePriority = useCallback((task: Task) => {
     void controller.updateTask(task.id, { priority: task.priority === "high" ? "low" : "high" });
   }, [controller.updateTask]);
+
+  const moveTaskAndSelectSourceNeighbor = useCallback((task: Task, bucket: Bucket) => {
+    if (task.bucket === bucket) return;
+
+    const sourceTasks = tasksForBucket(controller.tasks, task.bucket);
+    const sourceIndex = sourceTasks.findIndex(({ id }) => id === task.id);
+    if (sourceIndex < 0) {
+      void controller.moveTask(task.id, bucket);
+      return;
+    }
+    const neighborId = sourceTasks[sourceIndex + 1]?.id ?? sourceTasks[sourceIndex - 1]?.id ?? null;
+
+    const selectionVersion = selectionVersionRef.current + 1;
+    selectionVersionRef.current = selectionVersion;
+    setSelectedTaskId(neighborId);
+    void controller.moveTask(task.id, bucket).catch(() => {
+      if (selectionVersionRef.current === selectionVersion) selectTask(task.id);
+    });
+  }, [controller.moveTask, controller.tasks, selectTask]);
 
   const visibleTasks = useMemo(() => {
     if (view === "today") return todayTasks;
     if (view === "inbox") return inboxTasks;
     if (view === "logbook") return logbookTasks;
     if (view === "search") return searchResults;
-    return [...todayTasks, ...inboxTasks];
-  }, [view, todayTasks, inboxTasks, logbookTasks, searchResults]);
+    return [...inProgressTasks, ...todayTasks, ...inboxTasks];
+  }, [view, inProgressTasks, todayTasks, inboxTasks, logbookTasks, searchResults]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -355,12 +414,12 @@ export default function App() {
         }
         if (shortcutMatches(event, preferences.shortcuts.moveToday)) {
           event.preventDefault();
-          void controller.moveTask(selectedTask.id, "today");
+          moveTaskAndSelectSourceNeighbor(selectedTask, "today");
           return;
         }
         if (shortcutMatches(event, preferences.shortcuts.moveInbox)) {
           event.preventDefault();
-          void controller.moveTask(selectedTask.id, "inbox");
+          moveTaskAndSelectSourceNeighbor(selectedTask, "inbox");
           return;
         }
         if (shortcutMatches(event, preferences.shortcuts.togglePriority)) {
@@ -384,17 +443,17 @@ export default function App() {
         const currentIndex = visibleTasks.findIndex(({ id }) => id === selectedTaskId);
         const delta = event.key === "ArrowDown" ? 1 : -1;
         const nextIndex = currentIndex < 0 ? (delta > 0 ? 0 : visibleTasks.length - 1) : (currentIndex + delta + visibleTasks.length) % visibleTasks.length;
-        setSelectedTaskId(visibleTasks[nextIndex]?.id ?? null);
+        selectTask(visibleTasks[nextIndex]?.id ?? null);
       }
-      if (event.key === "Escape" && selectedTaskId) setSelectedTaskId(null);
+      if (event.key === "Escape" && selectedTaskId) selectTask(null);
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [preferences.shortcuts, paletteOpen, selectedTask, selectedTaskId, visibleTasks, controller, openComposer, openPalette, navigate, togglePriority, deleteTask]);
+  }, [preferences.shortcuts, paletteOpen, selectedTask, selectedTaskId, visibleTasks, controller, openComposer, openPalette, navigate, togglePriority, moveTaskAndSelectSourceNeighbor, deleteTask, selectTask]);
 
   const sectionProps = {
     selectedTaskId,
-    onSelect: setSelectedTaskId,
+    onSelect: selectTask,
     onComplete: (id: string) => void controller.completeTask(id),
     onRestore: (id: string) => void controller.restoreTask(id),
     onMove: (id: string, bucket: Bucket) => void controller.moveTask(id, bucket),
@@ -402,6 +461,11 @@ export default function App() {
     onDelete: deleteTask,
     onDropTask: dropTaskOnRow,
     onDropIntoBucket: dropTaskIntoBucket,
+    canAcceptDrop: canDropTaskIntoBucket,
+    onDropRejected: rejectTaskDrop,
+    draggedTaskId,
+    onTaskDragStart: (id: string) => setDraggedTaskId(id),
+    onTaskDragEnd: () => setDraggedTaskId(null),
   };
 
   const composer = (bucket: Bucket) => composerBucket === bucket ? (
@@ -411,7 +475,7 @@ export default function App() {
       onCreate={controller.createTask}
       onCreated={(task) => {
         setComposerBucket(null);
-        setSelectedTaskId(task.id);
+        selectTask(task.id);
         setPreferences((current) => ({ ...current, lastArea: task.area }));
       }}
       onCancel={() => setComposerBucket(null)}
@@ -453,6 +517,7 @@ export default function App() {
             <div className="loading-list" aria-label="Loading tasks"><span /><span /><span /><span /></div>
           ) : view === "home" ? (
             <>
+              <TaskSection title="In Progress" bucket="in_progress" maxTasks={inProgressTaskLimit} tasks={inProgressTasks} {...sectionProps} />
               <TaskSection title="Today" bucket="today" tasks={todayTasks} onAdd={() => openComposer("today")} {...sectionProps}>{composer("today")}</TaskSection>
               <TaskSection title="Inbox" bucket="inbox" tasks={inboxTasks} onAdd={() => openComposer("inbox")} {...sectionProps}>{composer("inbox")}</TaskSection>
             </>
@@ -484,9 +549,16 @@ export default function App() {
       {selectedTask ? (
         <TaskInspector
           task={selectedTask}
-          onClose={() => setSelectedTaskId(null)}
+          onClose={() => selectTask(null)}
           onUpdate={(patch) => controller.updateTask(selectedTask.id, patch)}
-          onMove={(bucket) => controller.moveTask(selectedTask.id, bucket)}
+          onMove={(bucket) => {
+            if (!canDropTaskIntoBucket(selectedTask.id, bucket)) {
+              rejectTaskDrop(bucket);
+              return Promise.resolve(selectedTask);
+            }
+            return controller.moveTask(selectedTask.id, bucket);
+          }}
+          inProgressFull={inProgressTasks.length >= inProgressTaskLimit}
           onComplete={() => void controller.completeTask(selectedTask.id)}
           onRestore={() => void controller.restoreTask(selectedTask.id)}
           onDelete={() => deleteTask(selectedTask.id)}

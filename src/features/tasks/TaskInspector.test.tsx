@@ -32,6 +32,7 @@ describe("task inspector", () => {
       />,
     );
 
+    expect(screen.getByRole("button", { name: "In Progress" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Today" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Inbox" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Restore to list/i })).toBeEnabled();

@@ -23,6 +23,8 @@ interface TaskRowProps {
   onTogglePriority: () => void;
   onDelete: () => void;
   onDropTask: (movingId: string, targetId: string, edge: "before" | "after") => void;
+  onTaskDragStart?: (id: string) => void;
+  onTaskDragEnd?: () => void;
 }
 
 export const taskDragType = "text/todou-task";
@@ -39,7 +41,7 @@ function prettyDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-export function TaskRow({ task, selected, semanticRole = "option", onSelect, onComplete, onRestore, onMove, onTogglePriority, onDelete, onDropTask }: TaskRowProps) {
+export function TaskRow({ task, selected, semanticRole = "option", onSelect, onComplete, onRestore, onMove, onTogglePriority, onDelete, onDropTask, onTaskDragStart, onTaskDragEnd }: TaskRowProps) {
   const [dropEdge, setDropEdge] = useState<"before" | "after" | null>(null);
 
   const stop = (event: MouseEvent, action: () => void) => {
@@ -74,8 +76,12 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData(taskDragType, task.id);
+        onTaskDragStart?.(task.id);
       }}
-      onDragEnd={() => setDropEdge(null)}
+      onDragEnd={() => {
+        setDropEdge(null);
+        onTaskDragEnd?.();
+      }}
       onDragOver={onDragOver}
       onDragLeave={() => setDropEdge(null)}
       onDrop={onDrop}

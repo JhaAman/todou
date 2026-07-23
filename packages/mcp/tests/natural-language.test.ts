@@ -29,6 +29,13 @@ describe("parseQuickTask", () => {
     });
   });
 
+  it("puts tasks tagged /in_progress in In Progress", () => {
+    expect(parseQuickTask("Continue implementation /in_progress", referenceDate)).toEqual({
+      title: "Continue implementation",
+      bucket: "in_progress",
+    });
+  });
+
   it("rejects an estimate shorter than one minute", () => {
     expect(() => parseQuickTask("Impossible task 0m", referenceDate)).toThrow(
       "Estimate must be between 1 minute and 24 hours.",

@@ -14,7 +14,7 @@ function renderDialog(overrides = {}) {
     onSave: vi.fn(async () => undefined),
     onTestConnection: vi.fn(async () => ({
       target: "local" as const,
-      protocolVersion: 1,
+      protocolVersion: 2,
       epoch: "local-epoch",
       watermark: 4,
       taskCount: 2,
@@ -45,7 +45,7 @@ describe("sync settings dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     fireEvent.change(screen.getByLabelText(/Project URL/i), { target: { value: "http://localhost:54321" } });
     await act(async () => {
-      resolveTest?.({ target: "local", protocolVersion: 1, epoch: "old-epoch", watermark: 4, taskCount: 2 });
+      resolveTest?.({ target: "local", protocolVersion: 2, epoch: "old-epoch", watermark: 4, taskCount: 2 });
       await pending;
     });
 

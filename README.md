@@ -4,7 +4,7 @@ Todou is a local-first, keyboard-driven task manager for macOS. Every action com
 
 ## What is included
 
-- Combined Home view with Today above Inbox, high priority first, and canonical drag ordering.
+- Combined Home view with a three-task In Progress lane above Today and Inbox, high priority first, and canonical drag ordering.
 - Work/personal accents, date-only due dates, small optional estimates, natural-language capture, Logbook, restore, delete, and `Cmd+Z` undo.
 - `Cmd+K` commands and editable shortcuts, `Cmd+P` search, eight live-preview dark themes, and a system-wide `Ctrl+Space` quick-entry window.
 - Close-to-tray behavior, launch at login, background sync, and one-file JSON export.
