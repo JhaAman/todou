@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useMemo, useState, type FocusEvent, type FormEvent, type KeyboardEvent } from "react";
 import { CalendarDays, Clock3, CornerDownLeft, Flag, Inbox, UserRound, X } from "lucide-react";
 import { parseNaturalLanguage } from "../../lib/naturalLanguage";
 import type { Area, Bucket, CreateTaskInput, Priority, Task } from "../../lib/types";
@@ -55,8 +55,13 @@ export function InlineComposer({ bucket, defaultArea, onCreate, onCreated, onCan
     }
   };
 
+  const onBlur = (event: FocusEvent<HTMLFormElement>) => {
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    if (!value.trim() && priority === "low" && area === defaultArea) onCancel();
+  };
+
   return (
-    <form className="inline-composer" onSubmit={submit} aria-label={`Add task to ${effectiveBucket}`}>
+    <form className="inline-composer" onBlur={onBlur} onSubmit={submit} aria-label={`Add task to ${effectiveBucket}`}>
       <div className={`composer-area-rail area-${effectiveArea}`} aria-hidden="true" />
       <div className="composer-main">
         <input
