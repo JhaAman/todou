@@ -312,62 +312,137 @@ pub fn register_quick_entry_shortcut(app: AppHandle, accelerator: String) -> App
 }
 
 #[cfg(debug_assertions)]
-fn newest_dmg(directory: &Path) -> AppResult<PathBuf> {
-    let mut builds = Vec::new();
-    for entry in std::fs::read_dir(directory).map_err(AppError::storage)? {
-        let entry = entry.map_err(AppError::storage)?;
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("dmg") {
-            continue;
-        }
-        let modified = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .map_err(AppError::storage)?;
-        builds.push((modified, path));
-    }
-
-    builds
-        .into_iter()
-        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)))
-        .map(|(_, path)| path)
-        .ok_or_else(|| AppError::storage("the build finished without producing a DMG"))
+fn is_todou_dmg(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name == "Todou.dmg" || name.starts_with("Todou_") && name.ends_with(".dmg")
 }
 
 #[cfg(debug_assertions)]
-fn build_and_open_dmg() -> AppResult<PathBuf> {
+fn is_todou_installer_mount(path: &Path) -> bool {
+    if path.parent() != Some(Path::new("/Volumes")) {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name == "Todou" {
+        return true;
+    }
+    name.strip_prefix("Todou ").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+    })
+}
+
+#[cfg(debug_assertions)]
+fn mounted_todou_installers(hdiutil_info: &str) -> Vec<PathBuf> {
+    let mut image_path = None;
+    let mut mounts = Vec::new();
+    for line in hdiutil_info.lines() {
+        if line.starts_with("===") {
+            image_path = None;
+            continue;
+        }
+        if line.trim_start().starts_with("image-path") {
+            image_path = line
+                .split_once(':')
+                .map(|(_, value)| PathBuf::from(value.trim()));
+            continue;
+        }
+        let Some(mount_start) = line.find("/Volumes/") else {
+            continue;
+        };
+        let mount = PathBuf::from(line[mount_start..].trim());
+        if image_path.as_deref().is_some_and(is_todou_dmg) && is_todou_installer_mount(&mount) {
+            mounts.push(mount);
+        }
+    }
+    mounts
+}
+
+#[cfg(debug_assertions)]
+fn detach_mounted_todou_installers() -> Vec<String> {
+    let output = match Command::new("/usr/bin/hdiutil").arg("info").output() {
+        Ok(output) if output.status.success() => output,
+        _ => return vec!["mounted Todou installers could not be inspected".to_owned()],
+    };
+    let info = String::from_utf8_lossy(&output.stdout);
+    let mut failures = Vec::new();
+    for mount in mounted_todou_installers(&info) {
+        if !mount.join("Todou.app").is_dir() || !mount.join("Applications").exists() {
+            continue;
+        }
+        match Command::new("/usr/bin/hdiutil")
+            .arg("detach")
+            .arg(&mount)
+            .status()
+        {
+            Ok(status) if status.success() => {}
+            _ => failures.push(mount.to_string_lossy().into_owned()),
+        }
+    }
+    failures
+}
+
+#[cfg(debug_assertions)]
+fn installed_app_path() -> AppResult<PathBuf> {
+    let system_app = PathBuf::from("/Applications/Todou.app");
+    if system_app.is_dir() {
+        return Ok(system_app);
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| AppError::storage("the home directory is unavailable"))?;
+    let user_app = home.join("Applications/Todou.app");
+    user_app
+        .is_dir()
+        .then_some(user_app)
+        .ok_or_else(|| AppError::storage("the installed production app is unavailable"))
+}
+
+#[cfg(debug_assertions)]
+fn build_and_install_app() -> AppResult<String> {
     let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .ok_or_else(|| AppError::storage("the project root is unavailable"))?;
-    let build = Command::new("bun")
-        .args(["run", "build"])
-        // Tauri skips its temporary Finder window in CI mode.
-        .env("CI", "true")
+    let script = project_root.join("scripts/install-macos-app.sh");
+    if !script.is_file() {
+        return Err(AppError::storage(
+            "the macOS installer script is unavailable",
+        ));
+    }
+    let install = Command::new(&script)
+        .env("TODOU_OPEN_AFTER_INSTALL", "0")
         .current_dir(project_root)
         .status()
-        .map_err(|error| AppError::storage(format!("could not start Bun: {error}")))?;
-    if !build.success() {
+        .map_err(|error| AppError::storage(format!("could not start the installer: {error}")))?;
+    if !install.success() {
         return Err(AppError::storage(format!(
-            "the production build failed with {build}"
+            "the production install failed with {install}"
         )));
     }
-
-    let dmg = newest_dmg(&project_root.join("src-tauri/target/release/bundle/dmg"))?;
+    let cleanup_failures = detach_mounted_todou_installers();
+    if !cleanup_failures.is_empty() {
+        return Ok(format!(
+            "Production app installed; eject {} from Finder",
+            cleanup_failures.join(", ")
+        ));
+    }
+    let installed_app = installed_app_path()?;
     let open = Command::new("/usr/bin/open")
-        .arg(&dmg)
+        .arg(&installed_app)
         .status()
-        .map_err(|error| AppError::storage(format!("could not open the DMG: {error}")))?;
-    if !open.success() {
-        return Err(AppError::storage(format!(
-            "macOS could not open the DMG ({open})"
-        )));
+        .map_err(|error| AppError::storage(format!("could not open the installed app: {error}")))?;
+    if open.success() {
+        Ok("Production app installed".to_owned())
+    } else {
+        Ok("Production app installed but could not be opened automatically".to_owned())
     }
-
-    Ok(dmg)
 }
 
 #[tauri::command]
-pub async fn dev_build_and_open_dmg() -> AppResult<String> {
+pub async fn dev_build_and_install_app() -> AppResult<String> {
     #[cfg(not(debug_assertions))]
     {
         Err(AppError::invalid_input(
@@ -377,10 +452,9 @@ pub async fn dev_build_and_open_dmg() -> AppResult<String> {
 
     #[cfg(debug_assertions)]
     {
-        let dmg = tauri::async_runtime::spawn_blocking(build_and_open_dmg)
+        tauri::async_runtime::spawn_blocking(build_and_install_app)
             .await
-            .map_err(|error| AppError::storage(format!("the build worker stopped: {error}")))??;
-        Ok(dmg.to_string_lossy().into_owned())
+            .map_err(|error| AppError::storage(format!("the install worker stopped: {error}")))?
     }
 }
 
@@ -444,21 +518,22 @@ mod tests {
     }
 
     #[test]
-    fn native_build_finds_the_generated_dmg() {
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::write(directory.path().join("build.log"), "not a bundle").unwrap();
-        let dmg = directory.path().join("Todou_0.1.0_aarch64.dmg");
-        std::fs::write(&dmg, "bundle").unwrap();
+    fn native_build_finds_only_mounted_todou_installer_images() {
+        let info = r#"
+================================================
+image-path      : /tmp/Todou_0.1.0_aarch64.dmg
+/dev/disk5s1	Apple_HFS	/Volumes/Todou 1
+================================================
+image-path      : /tmp/Other.dmg
+/dev/disk6s1	Apple_HFS	/Volumes/Todou 2
+================================================
+image-path      : /tmp/Todou_0.1.0_aarch64.dmg
+/dev/disk7s1	Apple_HFS	/Volumes/Todou 3 backup
+"#;
 
-        assert_eq!(newest_dmg(directory.path()).unwrap(), dmg);
-    }
-
-    #[test]
-    fn native_build_rejects_a_missing_dmg() {
-        let directory = tempfile::tempdir().unwrap();
-        let error = newest_dmg(directory.path()).unwrap_err();
-
-        assert_eq!(error.code, crate::error::ErrorCode::StorageUnavailable);
-        assert!(error.message.contains("without producing a DMG"));
+        assert_eq!(
+            mounted_todou_installers(info),
+            vec![PathBuf::from("/Volumes/Todou 1")]
+        );
     }
 }

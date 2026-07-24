@@ -27,17 +27,63 @@ CI=true bun run tauri build --bundles app
 source_app="src-tauri/target/release/bundle/macos/Todou.app"
 [[ -d "$source_app" ]] || fail "The build finished without a Todou.app bundle."
 
-applications_dir="$HOME/Applications"
+if [[ -d "/Applications/Todou.app" ]]; then
+  applications_dir="/Applications"
+else
+  applications_dir="$HOME/Applications"
+fi
 destination_app="$applications_dir/Todou.app"
 mkdir -p "$applications_dir"
 
+running_app="$destination_app/Contents/MacOS/todou"
+running_pids=()
+while IFS= read -r pid; do
+  [[ -n "$pid" ]] || continue
+  executable="$(/bin/ps -ww -p "$pid" -o comm= 2>/dev/null || true)"
+  [[ "$executable" == "$running_app" ]] && running_pids+=("$pid")
+done < <(/usr/bin/pgrep -x todou || true)
+
+if (( ${#running_pids[@]} )); then
+  /bin/kill -TERM "${running_pids[@]}" || fail "The running production app could not be stopped."
+  for _ in {1..50}; do
+    stopped=true
+    for pid in "${running_pids[@]}"; do
+      /bin/kill -0 "$pid" >/dev/null 2>&1 && stopped=false
+    done
+    if "$stopped"; then
+      break
+    fi
+    sleep 0.1
+  done
+  for pid in "${running_pids[@]}"; do
+    /bin/kill -0 "$pid" >/dev/null 2>&1 &&
+      fail "Quit the installed Todou app, then run the installer again."
+  done
+fi
+
+staging_app="$applications_dir/.Todou-install-$$.app"
+cleanup_staging() {
+  [[ ! -e "$staging_app" ]] || rm -R "$staging_app"
+}
+trap cleanup_staging EXIT
+
+/usr/bin/ditto "$source_app" "$staging_app"
+[[ -d "$staging_app" ]] || fail "The production app could not be staged."
+
+backup_app=""
 if [[ -e "$destination_app" ]]; then
   backup_app="$applications_dir/Todou-backup-$(date +%Y%m%d%H%M%S).app"
   mv "$destination_app" "$backup_app"
 fi
 
-ditto "$source_app" "$destination_app"
-open "$destination_app"
+if ! mv "$staging_app" "$destination_app"; then
+  [[ -z "$backup_app" || ! -e "$backup_app" ]] || mv "$backup_app" "$destination_app"
+  fail "The production app could not replace the installed copy."
+fi
+
+if [[ "${TODOU_OPEN_AFTER_INSTALL:-1}" != "0" ]] && ! /usr/bin/open "$destination_app"; then
+  printf 'Warning: Todou was installed but could not be opened automatically.\n' >&2
+fi
 
 printf '%s\n' "Todou is installed at $destination_app."
 printf '%s\n' "To enable hosted sync, open Cmd+K → Connection settings and enter your project URL and publishable key. Never use a service-role key."

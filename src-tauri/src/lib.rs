@@ -103,7 +103,7 @@ pub fn run() {
             commands::show_quick_entry,
             commands::hide_quick_entry,
             commands::register_quick_entry_shortcut,
-            commands::dev_build_and_open_dmg,
+            commands::dev_build_and_install_app,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Todou");

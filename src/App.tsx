@@ -296,8 +296,8 @@ export default function App() {
     setBuildingInstaller(true);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke<string>("dev_build_and_open_dmg");
-      showNotice("DMG opened — drag Todou to Applications");
+      const result = await invoke<string>("dev_build_and_install_app");
+      showNotice(result);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       showNotice(`Build failed: ${message}`);
