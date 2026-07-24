@@ -107,7 +107,7 @@ export function CommandPalette(props: CommandPaletteProps) {
     ...(import.meta.env.DEV && props.onBuildInstaller ? [{
       id: "build-installer",
       label: "Build production app",
-      detail: "Create and open a production DMG",
+      detail: "Install directly without leaving a mounted DMG",
       icon: <Hammer />,
       run: () => closeAnd(props.onBuildInstaller!),
     }] satisfies PaletteCommand[] : []),

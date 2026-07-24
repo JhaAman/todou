@@ -84,7 +84,9 @@ describe("command palette", () => {
     const onBuildInstaller = vi.fn();
     const { unmount } = renderPalette("commands", { onBuildInstaller });
 
-    fireEvent.click(screen.getByRole("option", { name: /Build production app/i }));
+    const buildCommand = screen.getByRole("option", { name: /Build production app/i });
+    expect(buildCommand).toHaveTextContent("Install directly without leaving a mounted DMG");
+    fireEvent.click(buildCommand);
     expect(onBuildInstaller).toHaveBeenCalledOnce();
 
     unmount();

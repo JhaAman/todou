@@ -19,7 +19,7 @@ On an Apple-silicon Mac with the Xcode command-line tools, Bun 1.3.14+, and Rust
 git clone https://github.com/JhaAman/todou.git && cd todou && ./scripts/install-macos-app.sh
 ```
 
-It builds and installs the production app in `~/Applications/Todou.app`, opens it, and configures Git so future worktrees install dependencies automatically. It does not start the development server or local Supabase. To update the installed app later, run these commands from the clone:
+It builds and installs the production app in `~/Applications/Todou.app`, or replaces `/Applications/Todou.app` when that copy already exists. It opens the installed app and configures Git so future worktrees install dependencies automatically. It does not start the development server or local Supabase. To update the installed app later, run these commands from the clone:
 
 ```sh
 git switch main
@@ -108,7 +108,7 @@ bun run build
 
 The unsigned DMG is emitted under `src-tauri/target/release/bundle/dmg/`. Code signing, notarization, Intel Macs, and the App Store are intentionally out of scope.
 
-In the development app, `Cmd+K` → **Build production app** runs the same build and opens the resulting DMG. This command is not available in production builds.
+In the development app, `Cmd+K` → **Build production app** builds the app bundle, replaces the installed copy, ejects mounted Todou installer volumes, and opens the production app. This command is not available in production builds.
 
 Local data lives under `~/Library/Application Support/com.magicproduct.todou/`. Deleting the SQLite database there deletes the local cache and any unsynced work.
 
