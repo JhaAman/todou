@@ -27,4 +27,5 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run check:rust
+      - run: bun run plugin:validate
       - run: bun run build:web

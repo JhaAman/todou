@@ -28,6 +28,7 @@
     "presupabase:test": "bun install --frozen-lockfile",
     "check:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "check": "bun run typecheck && bun run test && bun run test:rust",
+    "plugin:validate": "bun scripts/validate-plugin-install.ts",
     "mcp": "bun packages/mcp/src/index.ts",
     "mcp:build": "bun scripts/build-mcp.ts",
     "supabase:start": "supabase start",

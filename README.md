@@ -85,6 +85,8 @@ npx plugins add JhaAman/todou
 
 The open-plugin bundle supports Codex, Claude Code, Cursor, Grok Build, Kimi Code, GitHub Copilot CLI, and VS Code. It gives each agent the Todou skill and connects its MCP tools to the installed production app. The app may live in either `~/Applications/Todou.app` or `/Applications/Todou.app`; the bridge starts it automatically when needed.
 
+Claude Code can refresh Todou from `main` automatically at startup. `plugins` 1.3.4 installs a snapshot for Codex, so rerun the command to refresh Codex until its installer supports automatic updates.
+
 For development, configure a coding agent to launch the TypeScript stdio server:
 
 ```json

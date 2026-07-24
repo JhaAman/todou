@@ -6,7 +6,6 @@
   "plugins": [
     {
       "name": "todou",
-      "version": "0.1.0",
       "source": "./plugin/todou",
       "description": "Read and manage tasks in the local Todou production app."
     }
