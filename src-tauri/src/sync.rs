@@ -26,6 +26,7 @@ const MAX_PUSHES_PER_CYCLE: usize = 1_000;
 const PULL_BATCH: u32 = 200;
 const MAX_PULL_PAGES_PER_CYCLE: usize = 50;
 const LEGACY_IN_PROGRESS_PROTOCOL: &str = "legacy_in_progress_protocol";
+const ZERO_HLC_STAMP: &str = "0000000000000-0000000000-00000000000000000000000000000000";
 
 #[derive(Clone, Copy, Serialize)]
 #[repr(u8)]
@@ -238,21 +239,7 @@ impl SupabaseTransport {
 
     async fn bootstrap(&self) -> Result<BootstrapPayload, SyncFailure> {
         let row: BootstrapRow = self.rpc("bootstrap_tasks", &json!({})).await?;
-        if !row.description_register {
-            return Err(SyncFailure::retryable(
-                "Supabase task descriptions migration is not installed",
-            ));
-        }
-        let mut tasks = Vec::with_capacity(row.tasks.len());
-        for task in row.tasks {
-            tasks.push(task.into_task()?);
-        }
-        Ok(BootstrapPayload {
-            protocol_version: row.protocol_version,
-            epoch: row.epoch,
-            watermark: row.watermark,
-            tasks,
-        })
+        row.into_payload()
     }
 
     async fn head(&self) -> Result<RemoteHead, SyncFailure> {
@@ -309,10 +296,31 @@ impl SupabaseTransport {
 #[derive(Debug, Deserialize)]
 struct BootstrapRow {
     protocol_version: u32,
+    #[serde(default)]
     description_register: bool,
     epoch: String,
     watermark: u64,
     tasks: Vec<RemoteTaskRow>,
+}
+
+impl BootstrapRow {
+    fn into_payload(self) -> Result<BootstrapPayload, SyncFailure> {
+        if !self.description_register {
+            return Err(SyncFailure::retryable(
+                "Supabase task descriptions migration is not installed",
+            ));
+        }
+        let mut tasks = Vec::with_capacity(self.tasks.len());
+        for task in self.tasks {
+            tasks.push(task.into_task()?);
+        }
+        Ok(BootstrapPayload {
+            protocol_version: self.protocol_version,
+            epoch: self.epoch,
+            watermark: self.watermark,
+            tasks,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,6 +333,7 @@ struct RemoteHead {
 struct RemoteTaskRow {
     id: String,
     title: String,
+    #[serde(default)]
     description: String,
     bucket: Bucket,
     priority: Priority,
@@ -337,6 +346,7 @@ struct RemoteTaskRow {
     created_at: String,
     updated_at: String,
     title_clock: String,
+    #[serde(default = "default_description_clock")]
     description_clock: String,
     schedule_clock: String,
     priority_clock: String,
@@ -345,6 +355,10 @@ struct RemoteTaskRow {
     order_clock: String,
     completion_clock: String,
     deletion_clock: String,
+}
+
+fn default_description_clock() -> String {
+    ZERO_HLC_STAMP.to_owned()
 }
 
 fn canonical_remote_timestamp(value: String, field: &str) -> Result<String, SyncFailure> {
@@ -918,7 +932,43 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_response_requires_description_register_capability() {
+    fn postgres_snapshot_defaults_absent_description_register() {
+        let row: RemoteTaskRow = serde_json::from_str(
+            r#"{
+              "id":"40f18880-af35-4d55-b10c-ea7d50fe626f",
+              "title":"Legacy task",
+              "bucket":"inbox",
+              "priority":"low",
+              "area":"work",
+              "due_date":null,
+              "estimate_minutes":25,
+              "order_key":"V",
+              "completed_at":null,
+              "deleted_at":null,
+              "created_at":"2026-07-20T20:00:00.000Z",
+              "updated_at":"2026-07-20T20:00:00.000Z",
+              "title_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schedule_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "priority_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "area_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "estimate_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "order_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "completion_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "deletion_clock":"1721430000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }"#,
+        )
+        .unwrap();
+
+        let task = row.into_task().unwrap();
+        assert_eq!(task.description, "");
+        assert_eq!(
+            task.clocks.description,
+            "0000000000000-0000000000-00000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn bootstrap_response_without_description_capability_is_rejected() {
         let response = r#"{
           "protocol_version": 1,
           "epoch": "40f18880-af35-4d55-b10c-ea7d50fe626f",
@@ -926,7 +976,11 @@ mod tests {
           "tasks": []
         }"#;
 
-        assert!(serde_json::from_str::<BootstrapRow>(response).is_err());
+        let row: BootstrapRow = serde_json::from_str(response).unwrap();
+        assert_eq!(
+            row.into_payload().unwrap_err().message,
+            "Supabase task descriptions migration is not installed"
+        );
     }
 
     #[test]
