@@ -546,6 +546,11 @@ export default function App() {
         newTaskShortcut={preferences.shortcuts.newTask}
         commandPaletteShortcut={preferences.shortcuts.commandPalette}
         syncStatus={syncStatus}
+        syncConfigured={Boolean(syncSettings.url && syncSettings.publishableKey)}
+        syncRuntime={isTauriRuntime() ? "tauri" : "browser"}
+        onLoadSyncDiagnostics={taskClient.getSyncDiagnostics}
+        onCheckSyncAgain={() => taskClient.wakeSync()}
+        onOpenSyncSettings={() => setSettingsOpen(true)}
       />
 
       <main className="workspace">
