@@ -77,6 +77,14 @@ Todou intentionally uses a publishable/anonymous key without login for this priv
 
 ## MCP
 
+Install Todou once across the coding agents detected on your Mac:
+
+```sh
+npx plugins add JhaAman/todou
+```
+
+The open-plugin bundle supports Codex, Claude Code, Cursor, Grok Build, Kimi Code, GitHub Copilot CLI, and VS Code. It gives each agent the Todou skill and connects its MCP tools to the installed production app. The app may live in either `~/Applications/Todou.app` or `/Applications/Todou.app`; the bridge starts it automatically when needed.
+
 For development, configure a coding agent to launch the TypeScript stdio server:
 
 ```json
