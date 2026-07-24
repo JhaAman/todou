@@ -802,7 +802,13 @@ kbd {
   line-height: 1.36;
   user-select: text;
 }
-.inspector-title:hover { background: color-mix(in srgb, var(--surface-hover) 40%, transparent); border-radius: 6px; }
+.inspector-title:hover,
+.inspector-title:focus-visible {
+  border-radius: 6px;
+  outline: 0;
+  background: color-mix(in srgb, var(--surface-hover) 40%, transparent);
+}
+.inspector-title:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--focus-ring) 32%, transparent); }
 .inspector-description-editor { display: grid; gap: 7px; margin: 8px 0 0 6px; }
 .inspector-description-label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-meta); font-size: 10px; font-weight: 650; }
 .inspector-description {
@@ -851,9 +857,9 @@ kbd {
   background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
 }
 .field-name svg { flex: none; }
-.segmented-control { display: flex; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--bg) 45%, transparent); }
-.segmented-control button { min-width: 58px; height: 28px; padding: 0 9px; border-radius: 5px; color: var(--text-meta); background: transparent; font-size: 10.5px; }
-.list-segmented-control { min-width: 0; flex: 1; }
+.segmented-control { display: flex; width: 180px; max-width: 100%; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--bg) 45%, transparent); }
+.segmented-control button { min-width: 0; height: 28px; flex: 1; padding: 0 9px; border-radius: 5px; color: var(--text-meta); background: transparent; font-size: 10.5px; }
+.list-segmented-control { min-width: 0; }
 .list-segmented-control button { min-width: 0; flex: 1; padding: 0 6px; }
 .segmented-control button:hover:not(:disabled) { color: var(--text); }
 .segmented-control button:disabled { cursor: default; opacity: .55; }
