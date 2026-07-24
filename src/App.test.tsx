@@ -31,7 +31,7 @@ async function renderApp(tasks: Task[]) {
 }
 
 function taskRow(title: string): HTMLElement {
-  const row = screen.getByText(title).closest<HTMLElement>("[role='listitem']");
+  const row = screen.getByText(title, { selector: ".task-title" }).closest<HTMLElement>("[role='listitem']");
   if (!row) throw new Error(`Could not find task row for ${title}`);
   return row;
 }

@@ -228,7 +228,7 @@ export default function App() {
     if (next === "search") window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }, [view]);
 
-  const openComposer = useCallback((bucket?: Bucket) => {
+  const openComposer = useCallback((bucket?: Exclude<Bucket, "in_progress">) => {
     const defaultBucket = bucket ?? (view === "inbox" ? "inbox" : view === "today" || view === "home" ? "today" : "inbox");
     if (view === "search" || view === "logbook") setView(defaultBucket);
     setComposerBucket(defaultBucket);

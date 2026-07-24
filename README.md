@@ -60,6 +60,8 @@ bun run supabase:test
 bun run build:web
 ```
 
+The typecheck and test commands install the exact locked Bun dependencies automatically. `bun run test:rust` also builds its required MCP resource first.
+
 Reset the local remote database and reapply all migrations with `bun run supabase:reset`.
 
 ## Hosted Supabase

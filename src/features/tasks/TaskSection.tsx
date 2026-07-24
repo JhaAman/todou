@@ -60,9 +60,9 @@ export function TaskSection(props: TaskSectionProps) {
       onDropTask={props.onDropTask}
       canAcceptDrop={(movingId) => props.canAcceptDrop?.(movingId, props.bucket) ?? true}
       onDropRejected={() => props.onDropRejected?.(props.bucket)}
-      draggedTaskId={props.draggedTaskId}
-      onTaskDragStart={props.onTaskDragStart}
-      onTaskDragEnd={props.onTaskDragEnd}
+      {...(props.draggedTaskId === undefined ? {} : { draggedTaskId: props.draggedTaskId })}
+      {...(props.onTaskDragStart === undefined ? {} : { onTaskDragStart: props.onTaskDragStart })}
+      {...(props.onTaskDragEnd === undefined ? {} : { onTaskDragEnd: props.onTaskDragEnd })}
       shortcuts={props.shortcuts}
     />
   ));
@@ -84,10 +84,13 @@ export function TaskSection(props: TaskSectionProps) {
   const handleDrop = (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     const movingId = event.dataTransfer.getData(taskDragType) || props.draggedTaskId;
-    const accepted = Boolean(movingId) && (props.canAcceptDrop?.(movingId, props.bucket) ?? true);
     setDropState("idle");
-    if (movingId && accepted) props.onDropIntoBucket(movingId, props.bucket);
-    else if (movingId) props.onDropRejected?.(props.bucket);
+    if (!movingId) return;
+    if (props.canAcceptDrop?.(movingId, props.bucket) ?? true) {
+      props.onDropIntoBucket(movingId, props.bucket);
+    } else {
+      props.onDropRejected?.(props.bucket);
+    }
   };
 
   return (
