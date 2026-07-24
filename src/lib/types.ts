@@ -1,6 +1,6 @@
 import type { OpenCodeThemeFamilyId, OpenCodeThemeMode } from "./opencodeThemePalettes";
 
-export type Bucket = "today" | "inbox";
+export type Bucket = "in_progress" | "today" | "inbox";
 export type Priority = "high" | "low";
 export type Area = "personal" | "work";
 export const taskDescriptionMaxLength = 10_000;

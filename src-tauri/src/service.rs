@@ -25,6 +25,8 @@ use uuid::Uuid;
 
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("../migrations/0002_task_descriptions.sql");
+const MIGRATION_3: &str = include_str!("../migrations/0003_add_in_progress_bucket.sql");
+const IN_PROGRESS_TASK_LIMIT: i64 = 3;
 const TASK_COLUMNS: &str = "id, title, bucket, priority, area, due_date, estimate_minutes, \
     order_key, completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock, \
     priority_clock, area_clock, estimate_clock, order_clock, completion_clock, deletion_clock, \
@@ -105,12 +107,13 @@ impl TaskService {
 
         let local_date = self.inner.clock.local_date();
         let mut bucket = input.bucket;
-        if input
-            .due_date
-            .as_deref()
-            .map(parse_due_date)
-            .transpose()?
-            .is_some_and(|date| date <= local_date)
+        if bucket == Bucket::Inbox
+            && input
+                .due_date
+                .as_deref()
+                .map(parse_due_date)
+                .transpose()?
+                .is_some_and(|date| date <= local_date)
         {
             bucket = Bucket::Today;
         }
@@ -123,6 +126,9 @@ impl TaskService {
             .map_err(AppError::from)?;
         if load_task(&transaction, &id)?.is_some() {
             return Err(AppError::invalid_input("task id already exists"));
+        }
+        if bucket == Bucket::InProgress {
+            ensure_in_progress_capacity(&transaction, None)?;
         }
         let order_key = next_tier_key(&transaction, bucket, input.priority, None)?;
         let stamp = next_stamp(&transaction, now_ms)?;
@@ -203,7 +209,7 @@ impl TaskService {
                     task.due_date = Some(due_date);
                     changed.insert("schedule");
                 }
-                if date <= local_date && task.bucket != Bucket::Today {
+                if date <= local_date && task.bucket == Bucket::Inbox {
                     task.bucket = Bucket::Today;
                     changed.insert("schedule");
                 }
@@ -267,6 +273,10 @@ impl TaskService {
             let revision = read_revision(&transaction)?;
             transaction.commit().map_err(AppError::from)?;
             return Ok(Revisioned::new(task, revision));
+        }
+
+        if bucket_changed && bucket == Bucket::InProgress {
+            ensure_in_progress_capacity(&transaction, Some(task.id.as_str()))?;
         }
 
         task.bucket = bucket;
@@ -366,6 +376,9 @@ impl TaskService {
         }
 
         let mut changed = BTreeSet::from(["completion"]);
+        if !complete && task.bucket == Bucket::InProgress {
+            ensure_in_progress_capacity(&transaction, Some(task.id.as_str()))?;
+        }
         task.completed_at = complete.then(|| now.clone());
         if !complete
             && task.bucket == Bucket::Inbox
@@ -428,6 +441,9 @@ impl TaskService {
                     "task is not deleted"
                 },
             ));
+        }
+        if !delete && task.bucket == Bucket::InProgress {
+            ensure_in_progress_capacity(&transaction, Some(task.id.as_str()))?;
         }
         task.deleted_at = delete.then(|| now.clone());
         let stamp = next_stamp(&transaction, now_ms)?;
@@ -808,6 +824,30 @@ impl TaskService {
         Ok(())
     }
 
+    pub fn promote_legacy_outbox_mutation(&self, operation_id: &str) -> AppResult<()> {
+        validate_uuid(operation_id, "operationId")?;
+        let now = hlc::timestamp(self.inner.clock.now_millis())?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let changed = transaction
+            .execute(
+                "UPDATE outbox
+                    SET protocol_version = ?2, attempt_count = 0, next_attempt_at = ?3, last_error = NULL
+                  WHERE operation_id = ?1 AND status = 'pending' AND protocol_version = 1",
+                params![operation_id, PROTOCOL_VERSION, now],
+            )
+            .map_err(AppError::from)?;
+        if changed != 1 {
+            return Err(AppError::new(
+                ErrorCode::ProtocolMismatch,
+                "legacy outbox mutation is unavailable for protocol upgrade",
+            ));
+        }
+        transaction.commit().map_err(AppError::from)
+    }
+
     pub fn ack_outbox(&self, operation_id: &str, remote_task: Task) -> AppResult<Revisioned<Task>> {
         validate_uuid(operation_id, "operationId")?;
         validate_remote_task(&remote_task)?;
@@ -1036,38 +1076,73 @@ fn run_migrations(connection: &mut Connection, now_ms: i64) -> AppResult<()> {
     } else {
         0
     };
-    if version > 2 {
+    if version > 3 {
         return Err(AppError::new(
             ErrorCode::ProtocolMismatch,
             "local database was created by a newer Todou version",
         ));
     }
 
-    let transaction = connection.transaction().map_err(AppError::from)?;
     if version < 1 {
-        transaction
-            .execute_batch(MIGRATION_1)
-            .map_err(AppError::from)?;
-        transaction
-            .execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?1)",
-                [hlc::timestamp(now_ms)?],
-            )
-            .map_err(AppError::from)?;
+        apply_migration(connection, MIGRATION_1, 1, now_ms)?;
     }
     if version < 2 {
-        transaction
-            .execute_batch(MIGRATION_2)
-            .map_err(AppError::from)?;
-        transaction
-            .execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?1)",
-                [hlc::timestamp(now_ms)?],
-            )
-            .map_err(AppError::from)?;
+        apply_migration(connection, MIGRATION_2, 2, now_ms)?;
     }
-    transaction.commit().map_err(AppError::from)?;
+    if version == 2 && !tasks_have_description(connection)? {
+        // The unmerged In Progress branch used version 2 before descriptions landed.
+        apply_legacy_description_migration(connection)?;
+    }
+    if version < 3 {
+        connection
+            .execute_batch("PRAGMA foreign_keys = OFF;")
+            .map_err(AppError::from)?;
+        let migration = apply_migration(connection, MIGRATION_3, 3, now_ms);
+        let foreign_keys = connection.execute_batch("PRAGMA foreign_keys = ON;");
+        migration?;
+        foreign_keys.map_err(AppError::from)?;
+    }
     Ok(())
+}
+
+fn apply_migration(
+    connection: &mut Connection,
+    migration: &str,
+    version: i64,
+    now_ms: i64,
+) -> AppResult<()> {
+    let transaction = connection.transaction().map_err(AppError::from)?;
+    transaction
+        .execute_batch(migration)
+        .map_err(AppError::from)?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+            params![version, hlc::timestamp(now_ms)?],
+        )
+        .map_err(AppError::from)?;
+    transaction.commit().map_err(AppError::from)
+}
+
+fn apply_legacy_description_migration(connection: &mut Connection) -> AppResult<()> {
+    let transaction = connection.transaction().map_err(AppError::from)?;
+    transaction
+        .execute_batch(MIGRATION_2)
+        .map_err(AppError::from)?;
+    transaction.commit().map_err(AppError::from)
+}
+
+fn tasks_have_description(connection: &Connection) -> AppResult<bool> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(tasks)")
+        .map_err(AppError::from)?;
+    let mut rows = statement.query([]).map_err(AppError::from)?;
+    while let Some(row) = rows.next().map_err(AppError::from)? {
+        if row.get::<_, String>(1).map_err(AppError::from)? == "description" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn ensure_device_id(connection: &Connection) -> AppResult<String> {
@@ -1411,6 +1486,25 @@ fn next_tier_key(
         .optional()
         .map_err(AppError::from)?;
     order_key::between(last.as_deref(), None)
+}
+
+fn ensure_in_progress_capacity(connection: &Connection, exclude_id: Option<&str>) -> AppResult<()> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) FROM tasks
+             WHERE bucket = 'in_progress' AND completed_at IS NULL AND deleted_at IS NULL
+               AND (?1 IS NULL OR id != ?1)",
+            [exclude_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(AppError::from)?;
+    if count >= IN_PROGRESS_TASK_LIMIT {
+        return Err(AppError::new(
+            ErrorCode::InvalidTransition,
+            "In Progress can only contain three active tasks",
+        ));
+    }
+    Ok(())
 }
 
 fn load_active_tier(

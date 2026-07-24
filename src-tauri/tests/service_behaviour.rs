@@ -197,6 +197,208 @@ fn description_edits_queue_only_the_description_register() {
 }
 
 #[test]
+fn promotes_a_rejected_legacy_outbox_mutation_without_changing_its_id() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("todou.sqlite3");
+    let original = {
+        let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+        service.create_task(input("Promote me")).unwrap();
+        service.next_outbox(100).unwrap().result.pop().unwrap()
+    };
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE outbox SET protocol_version = 1 WHERE operation_id = ?1",
+            [&original.operation_id],
+        )
+        .unwrap();
+    drop(connection);
+
+    let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    service
+        .promote_legacy_outbox_mutation(&original.operation_id)
+        .unwrap();
+    let promoted = service.next_outbox(100).unwrap().result.pop().unwrap();
+
+    assert_eq!(promoted.operation_id, original.operation_id);
+    assert_eq!(promoted.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(promoted.registers, original.registers);
+}
+
+#[test]
+fn upgrades_a_v1_database_for_descriptions_and_in_progress_tasks() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("todou.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0001_initial.sql"))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-07-20T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO tasks (
+                id, title, bucket, priority, area, due_date, estimate_minutes, order_key,
+                completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock,
+                priority_clock, area_clock, estimate_clock, order_clock, completion_clock, deletion_clock
+             ) VALUES (
+                '10000000-0000-4000-8000-000000000001', 'Existing v1 task', 'today', 'low', 'personal',
+                null, null, 'V', null, null, '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+             );",
+        )
+        .unwrap();
+    drop(connection);
+
+    let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    assert_eq!(
+        service
+            .get_task("10000000-0000-4000-8000-000000000001")
+            .unwrap()
+            .result
+            .title,
+        "Existing v1 task"
+    );
+    let mut in_progress = input("Migrated task");
+    in_progress.bucket = Bucket::InProgress;
+    assert_eq!(
+        service.create_task(in_progress).unwrap().result.bucket,
+        Bucket::InProgress
+    );
+    drop(service);
+
+    let connection = Connection::open(path).unwrap();
+    let version = connection
+        .query_row("SELECT max(version) FROM schema_migrations", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    assert_eq!(version, 3);
+}
+
+#[test]
+fn v2_description_database_resets_cursor_for_protocol_upgrade() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("todou.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0001_initial.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0002_task_descriptions.sql"))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?1)",
+            ["2026-07-20T00:00:00.000Z"],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO metadata(key, value) VALUES ('sync_epoch', ?1)",
+            [epoch()],
+        )
+        .unwrap();
+    connection
+        .execute("UPDATE metadata SET value = '4' WHERE key = 'sync_seq'", [])
+        .unwrap();
+    drop(connection);
+
+    let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    let cursor = service.cursor().unwrap();
+
+    assert_eq!(cursor.epoch, None);
+    assert_eq!(cursor.sequence, 0);
+    drop(service);
+
+    let connection = Connection::open(path).unwrap();
+    let version = connection
+        .query_row("SELECT max(version) FROM schema_migrations", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    assert_eq!(version, 3);
+}
+
+#[test]
+fn repairs_a_premerge_in_progress_v2_database() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("todou.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0001_initial.sql"))
+        .unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO tasks (
+                id, title, bucket, priority, area, due_date, estimate_minutes, order_key,
+                completed_at, deleted_at, created_at, updated_at, title_clock, schedule_clock,
+                priority_clock, area_clock, estimate_clock, order_clock, completion_clock,
+                deletion_clock
+             ) VALUES (
+                '10000000-0000-4000-8000-000000000002', 'Legacy in progress task', 'today', 'low', 'personal',
+                null, null, 'V', null, null, '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                '0000000000000-0000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+             );",
+        )
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0002_task_descriptions.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../migrations/0003_add_in_progress_bucket.sql"
+        ))
+        .unwrap();
+    connection
+        .execute_batch(
+            "UPDATE tasks SET bucket = 'in_progress' WHERE id = '10000000-0000-4000-8000-000000000002';
+             ALTER TABLE tasks DROP COLUMN description;
+             ALTER TABLE tasks DROP COLUMN description_clock;
+             INSERT INTO schema_migrations(version, applied_at) VALUES (2, '2026-07-20T00:00:00.000Z');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    let task = service
+        .get_task("10000000-0000-4000-8000-000000000002")
+        .unwrap()
+        .result;
+
+    assert_eq!(task.bucket, Bucket::InProgress);
+    assert_eq!(task.description, "");
+    drop(service);
+
+    let connection = Connection::open(path).unwrap();
+    let version = connection
+        .query_row("SELECT max(version) FROM schema_migrations", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    assert_eq!(version, 3);
+}
+
+#[test]
 fn unfiltered_restart_load_includes_active_and_completed_tasks() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("todou.sqlite3");
@@ -328,6 +530,35 @@ fn due_and_move_transitions_preserve_schedule_invariant() {
         .result;
     assert_eq!(dated.bucket, Bucket::Today);
     assert_eq!(dated.due_date.as_deref(), Some("2026-07-19"));
+}
+
+#[test]
+fn limits_active_in_progress_tasks_to_three() {
+    let service = service();
+    let first = service.create_task(input("First")).unwrap().result;
+    let second = service.create_task(input("Second")).unwrap().result;
+    let third = service.create_task(input("Third")).unwrap().result;
+    let fourth = service.create_task(input("Fourth")).unwrap().result;
+
+    for task in [&first, &second, &third] {
+        service.move_task(&task.id, Bucket::InProgress).unwrap();
+    }
+
+    let error = service
+        .move_task(&fourth.id, Bucket::InProgress)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidTransition);
+    assert_eq!(
+        service.get_task(&fourth.id).unwrap().result.bucket,
+        Bucket::Inbox
+    );
+
+    service.move_task(&first.id, Bucket::Today).unwrap();
+    let moved = service
+        .move_task(&fourth.id, Bucket::InProgress)
+        .unwrap()
+        .result;
+    assert_eq!(moved.bucket, Bucket::InProgress);
 }
 
 #[test]

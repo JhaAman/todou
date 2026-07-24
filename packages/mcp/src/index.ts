@@ -13,7 +13,7 @@ const local = new TodouLocalClient();
 const server = new McpServer({ name: "todou", version: "0.1.0" });
 
 const taskId = z.string().uuid().describe("The Todou task UUID.");
-const bucket = z.enum(["today", "inbox"]);
+const bucket = z.enum(["in_progress", "today", "inbox"]);
 const priority = z.enum(["high", "low"]);
 const area = z.enum(["personal", "work"]);
 const dueDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -195,7 +195,7 @@ server.registerTool(
   {
     title: "Move a Todou task",
     description:
-      "Move a task between Today and Inbox. Moving to Inbox clears its due date.",
+      "Move a task between In Progress, Today, and Inbox. Moving to Inbox clears its due date.",
     inputSchema: { id: taskId, bucket },
     outputSchema: envelopeSchema(task),
     annotations: { idempotentHint: true },

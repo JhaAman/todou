@@ -4,7 +4,7 @@ use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, str::FromStr};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const DESCRIPTION_MAX_LENGTH: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,8 +21,9 @@ impl<T> Revisioned<T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum Bucket {
+    InProgress,
     Today,
     Inbox,
 }
@@ -30,6 +31,7 @@ pub enum Bucket {
 impl Bucket {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::InProgress => "in_progress",
             Self::Today => "today",
             Self::Inbox => "inbox",
         }
@@ -37,8 +39,9 @@ impl Bucket {
 
     pub fn sort_rank(self) -> u8 {
         match self {
-            Self::Today => 0,
-            Self::Inbox => 1,
+            Self::InProgress => 0,
+            Self::Today => 1,
+            Self::Inbox => 2,
         }
     }
 }
@@ -48,9 +51,12 @@ impl FromStr for Bucket {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "in_progress" => Ok(Self::InProgress),
             "today" => Ok(Self::Today),
             "inbox" => Ok(Self::Inbox),
-            _ => Err(AppError::invalid_input("bucket must be 'today' or 'inbox'")),
+            _ => Err(AppError::invalid_input(
+                "bucket must be 'in_progress', 'today', or 'inbox'",
+            )),
         }
     }
 }

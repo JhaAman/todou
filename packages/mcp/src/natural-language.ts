@@ -2,7 +2,7 @@ import * as chrono from "chrono-node";
 
 export type ParsedQuickTask = {
   title: string;
-  bucket?: "today" | "inbox";
+  bucket?: "in_progress" | "today" | "inbox";
   priority?: "high" | "low";
   area?: "personal" | "work";
   dueDate?: string;
@@ -27,6 +27,7 @@ export function parseQuickTask(input: string, now = new Date()): ParsedQuickTask
     { pattern: /(?:^|\s)!low(?=\s|$)/i, apply: () => { parsed.priority = "low"; } },
     { pattern: /(?:^|\s)\/work(?=\s|$)/i, apply: () => { parsed.area = "work"; } },
     { pattern: /(?:^|\s)\/personal(?=\s|$)/i, apply: () => { parsed.area = "personal"; } },
+    { pattern: /(?:^|\s)\/in_progress(?=\s|$)/i, apply: () => { parsed.bucket = "in_progress"; } },
     { pattern: /(?:^|\s)\/today(?=\s|$)/i, apply: () => { parsed.bucket = "today"; } },
     { pattern: /(?:^|\s)\/inbox(?=\s|$)/i, apply: () => { parsed.bucket = "inbox"; } },
     {

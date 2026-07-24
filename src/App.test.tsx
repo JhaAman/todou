@@ -31,7 +31,7 @@ async function renderApp(tasks: Task[]) {
 }
 
 function taskRow(title: string): HTMLElement {
-  const row = screen.getByText(title).closest<HTMLElement>("[role='listitem']");
+  const row = screen.getByText(title, { selector: ".task-title" }).closest<HTMLElement>("[role='listitem']");
   if (!row) throw new Error(`Could not find task row for ${title}`);
   return row;
 }
@@ -70,6 +70,18 @@ describe("task drag and drop", () => {
 
     await waitFor(() => expect(within(inbox).getByText("Move to Inbox")).toBeInTheDocument());
     expect(storedTask("today-task")).toMatchObject({ bucket: "inbox", dueDate: null });
+  });
+
+  it("moves an Inbox task into an empty Today section", async () => {
+    await renderApp([
+      task({ id: "inbox-task", title: "Move to Today", bucket: "inbox", dueDate: "2026-07-30" }),
+    ]);
+
+    const today = screen.getByRole("region", { name: "Today" });
+    drag(taskRow("Move to Today"), today);
+
+    await waitFor(() => expect(within(today).getByText("Move to Today")).toBeInTheDocument());
+    expect(storedTask("inbox-task")).toMatchObject({ bucket: "today", dueDate: "2026-07-30" });
   });
 
   it("moves an Inbox task to Today when it is dropped on a Today task", async () => {
@@ -174,6 +186,127 @@ describe("task drag and drop", () => {
       expect(rows[0]).toHaveTextContent("Second");
       expect(rows[1]).toHaveTextContent("First");
     });
+  });
+
+  it("moves a task into In Progress while it has room", async () => {
+    await renderApp([
+      task({ id: "first", title: "First in progress", bucket: "in_progress" }),
+      task({ id: "second", title: "Second in progress", bucket: "in_progress" }),
+      task({ id: "inbox-task", title: "Start this", bucket: "inbox" }),
+    ]);
+
+    const inProgress = screen.getByRole("region", { name: "In Progress" });
+    const transfer = dataTransfer();
+    fireEvent.dragStart(taskRow("Start this"), { dataTransfer: transfer });
+    const getData = vi.spyOn(transfer, "getData").mockReturnValue("");
+    fireEvent.dragOver(inProgress, { dataTransfer: transfer });
+
+    expect(inProgress).toHaveClass("is-task-drop-target");
+
+    getData.mockRestore();
+    fireEvent.drop(inProgress, { dataTransfer: transfer });
+
+    await waitFor(() => expect(within(inProgress).getByText("Start this")).toBeInTheDocument());
+    expect(storedTask("inbox-task")).toMatchObject({ bucket: "in_progress" });
+  });
+
+  it("rejects a fourth task dropped into In Progress", async () => {
+    await renderApp([
+      task({ id: "first", title: "First in progress", bucket: "in_progress" }),
+      task({ id: "second", title: "Second in progress", bucket: "in_progress" }),
+      task({ id: "third", title: "Third in progress", bucket: "in_progress" }),
+      task({ id: "inbox-task", title: "Too many", bucket: "inbox" }),
+    ]);
+    const inProgress = screen.getByRole("region", { name: "In Progress" });
+    const moveTask = vi.spyOn(taskClient, "moveTask");
+    const transfer = dataTransfer();
+
+    fireEvent.dragStart(taskRow("Too many"), { dataTransfer: transfer });
+    fireEvent.dragOver(inProgress, { dataTransfer: transfer });
+
+    expect(inProgress).toHaveClass("is-task-drop-invalid");
+
+    fireEvent.drop(inProgress, { dataTransfer: transfer });
+
+    expect(storedTask("inbox-task")).toMatchObject({ bucket: "inbox" });
+    expect(moveTask).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fourth task dropped directly onto an In Progress task", async () => {
+    await renderApp([
+      task({ id: "first", title: "First in progress", bucket: "in_progress" }),
+      task({ id: "second", title: "Second in progress", bucket: "in_progress" }),
+      task({ id: "third", title: "Third in progress", bucket: "in_progress" }),
+      task({ id: "inbox-task", title: "Too many", bucket: "inbox" }),
+    ]);
+    const destination = taskRow("First in progress");
+    const moveTask = vi.spyOn(taskClient, "moveTask");
+    vi.spyOn(destination, "getBoundingClientRect").mockReturnValue({
+      top: 0,
+      height: 100,
+    } as DOMRect);
+    const transfer = dataTransfer();
+
+    fireEvent.dragStart(taskRow("Too many"), { dataTransfer: transfer });
+    const getData = vi.spyOn(transfer, "getData").mockReturnValue("");
+    fireEvent.dragOver(destination, { clientY: 75, dataTransfer: transfer });
+
+    expect(destination).toHaveClass("is-task-drop-invalid");
+    expect(destination).not.toHaveClass("is-task-drop-target");
+
+    getData.mockRestore();
+    fireEvent.drop(destination, { clientY: 75, dataTransfer: transfer });
+
+    expect(storedTask("inbox-task")).toMatchObject({ bucket: "inbox" });
+    expect(moveTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("task move keyboard shortcuts", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("selects the following Inbox task after moving the selected task to Today", async () => {
+    await renderApp([
+      task({ id: "first-inbox", title: "Move first", bucket: "inbox", orderKey: "000001" }),
+      task({ id: "second-inbox", title: "Keep going", bucket: "inbox", orderKey: "000002" }),
+    ]);
+
+    fireEvent.click(taskRow("Move first"));
+    fireEvent.keyDown(document.body, { key: "t", metaKey: true, shiftKey: true });
+
+    await waitFor(() => expect(storedTask("first-inbox")).toMatchObject({ bucket: "today" }));
+    expect(taskRow("Keep going")).toHaveAttribute("aria-current", "true");
+    expect(taskRow("Move first")).not.toHaveAttribute("aria-current", "true");
+  });
+
+  it("selects the preceding Today task when the selected source task is last", async () => {
+    await renderApp([
+      task({ id: "first-today", title: "Keep going", bucket: "today", orderKey: "000001" }),
+      task({ id: "last-today", title: "Move last", bucket: "today", orderKey: "000002" }),
+      task({ id: "inbox-task", title: "Already Inbox", bucket: "inbox", orderKey: "000001" }),
+    ]);
+
+    fireEvent.click(taskRow("Move last"));
+    fireEvent.keyDown(document.body, { key: "i", metaKey: true, shiftKey: true });
+
+    await waitFor(() => expect(storedTask("last-today")).toMatchObject({ bucket: "inbox" }));
+    expect(taskRow("Keep going")).toHaveAttribute("aria-current", "true");
+    expect(taskRow("Already Inbox")).not.toHaveAttribute("aria-current", "true");
+    expect(taskRow("Move last")).not.toHaveAttribute("aria-current", "true");
+  });
+
+  it("restores the moved task selection when the keyboard move fails", async () => {
+    await renderApp([
+      task({ id: "first-inbox", title: "Move first", bucket: "inbox", orderKey: "000001" }),
+      task({ id: "second-inbox", title: "Keep going", bucket: "inbox", orderKey: "000002" }),
+    ]);
+    vi.spyOn(taskClient, "moveTask").mockRejectedValueOnce(new Error("Move failed"));
+
+    fireEvent.click(taskRow("Move first"));
+    fireEvent.keyDown(document.body, { key: "t", metaKey: true, shiftKey: true });
+
+    await waitFor(() => expect(taskRow("Move first")).toHaveAttribute("aria-current", "true"));
+    expect(storedTask("first-inbox")).toMatchObject({ bucket: "inbox" });
   });
 });
 

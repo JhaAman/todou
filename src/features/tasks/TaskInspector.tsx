@@ -20,13 +20,14 @@ interface TaskInspectorProps {
   onClose: () => void;
   onUpdate: (patch: EditableTaskPatch) => Promise<unknown>;
   onMove: (bucket: Task["bucket"]) => void;
+  inProgressFull?: boolean;
   onComplete: () => void;
   onRestore: () => void;
   onDelete: () => void;
   completeShortcut: string;
 }
 
-export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onRestore, onDelete, completeShortcut }: TaskInspectorProps) {
+export function TaskInspector({ task, onClose, onUpdate, onMove, inProgressFull = false, onComplete, onRestore, onDelete, completeShortcut }: TaskInspectorProps) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [estimate, setEstimate] = useState(formatEstimate(task.estimateMinutes));
@@ -113,7 +114,14 @@ export function TaskInspector({ task, onClose, onUpdate, onMove, onComplete, onR
 
         <div className="field-row">
           <span className="field-name" title="List" aria-label="List"><Inbox size={15} /><span className="sr-only">List</span></span>
-          <div className="segmented-control" role="group" aria-label="List">
+          <div className="segmented-control list-segmented-control" role="group" aria-label="List">
+            <button
+              className={task.bucket === "in_progress" ? "is-active" : ""}
+              aria-pressed={task.bucket === "in_progress"}
+              disabled={Boolean(task.completedAt) || (inProgressFull && task.bucket !== "in_progress")}
+              title={task.completedAt ? "Restore this task before moving it" : inProgressFull && task.bucket !== "in_progress" ? "In Progress is full" : undefined}
+              onClick={() => void onMove("in_progress")}
+            >In Progress</button>
             <button
               className={task.bucket === "today" ? "is-active" : ""}
               aria-pressed={task.bucket === "today"}

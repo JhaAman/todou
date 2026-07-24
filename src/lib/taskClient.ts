@@ -51,6 +51,7 @@ const browserStoreKey = "todou.browser.tasks.v1";
 const browserSeedKey = "todou.browser.seeded.v1";
 const browserEvent = "todou:browser-tasks-changed";
 const browserSyncSettingsKey = "todou.browser.sync-settings.v1";
+const inProgressTaskLimit = 3;
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -104,6 +105,18 @@ function nextOrderKey(tasks: Task[], bucket: Task["bucket"], priority: Task["pri
   return Number.isFinite(numeric) ? `${numeric + 1}`.padStart(6, "0") : `${Date.now()}`;
 }
 
+function ensureInProgressCapacity(tasks: Task[], excludeId?: string): void {
+  const active = tasks.filter((task) => (
+    task.id !== excludeId
+    && task.bucket === "in_progress"
+    && !task.completedAt
+    && !task.deletedAt
+  ));
+  if (active.length >= inProgressTaskLimit) {
+    throw new Error("In Progress can only contain three active tasks");
+  }
+}
+
 function applyFilter(tasks: Task[], filter: TaskFilter = {}): Task[] {
   return tasks.filter((task) => {
     if (filter.bucket && task.bucket !== filter.bucket) return false;
@@ -124,7 +137,9 @@ function browserClient(): TaskClient {
       const tasks = readBrowserTasks();
       const now = new Date().toISOString();
       const dueToday = Boolean(input.dueDate && input.dueDate <= localDateString());
-      const bucket = dueToday ? "today" : (input.bucket ?? "inbox");
+      let bucket = input.bucket ?? "inbox";
+      if (dueToday && bucket === "inbox") bucket = "today";
+      if (bucket === "in_progress") ensureInProgressCapacity(tasks);
       const priority = input.priority ?? "low";
       const task: Task = {
         id: crypto.randomUUID(),
@@ -157,7 +172,7 @@ function browserClient(): TaskClient {
         ...(description === undefined ? {} : { description }),
         updatedAt: new Date().toISOString(),
       };
-      if (patch.dueDate && patch.dueDate <= localDateString()) next.bucket = "today";
+      if (patch.dueDate && patch.dueDate <= localDateString() && current.bucket === "inbox") next.bucket = "today";
       if (patch.priority && patch.priority !== current.priority) {
         next.orderKey = nextOrderKey(tasks, next.bucket, patch.priority);
       }
@@ -168,6 +183,9 @@ function browserClient(): TaskClient {
       const tasks = readBrowserTasks();
       const current = tasks.find((task) => task.id === id);
       if (!current) throw new Error("Task not found");
+      if (bucket === "in_progress" && current.bucket !== bucket) {
+        ensureInProgressCapacity(tasks, current.id);
+      }
       const next: Task = {
         ...current,
         bucket,
@@ -206,8 +224,14 @@ function browserClient(): TaskClient {
       const tasks = readBrowserTasks();
       const current = tasks.find((task) => task.id === id);
       if (!current) throw new Error("Task not found");
+      if (current.bucket === "in_progress") ensureInProgressCapacity(tasks, current.id);
       const dueToday = Boolean(current.dueDate && current.dueDate <= localDateString());
-      const next = { ...current, completedAt: null, bucket: dueToday ? "today" as const : current.bucket, updatedAt: new Date().toISOString() };
+      const next = {
+        ...current,
+        completedAt: null,
+        bucket: dueToday && current.bucket === "inbox" ? "today" as const : current.bucket,
+        updatedAt: new Date().toISOString(),
+      };
       writeBrowserTasks(tasks.map((task) => task.id === id ? next : task));
       return clone(next);
     },
@@ -220,6 +244,7 @@ function browserClient(): TaskClient {
       const tasks = readBrowserTasks();
       const current = tasks.find((task) => task.id === id);
       if (!current) throw new Error("Task not found");
+      if (current.bucket === "in_progress") ensureInProgressCapacity(tasks, current.id);
       const next = { ...current, deletedAt: null, updatedAt: new Date().toISOString() };
       writeBrowserTasks(tasks.map((task) => task.id === id ? next : task));
       return clone(next);

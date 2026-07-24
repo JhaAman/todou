@@ -10,7 +10,7 @@
 
 ## Invariants
 
-- `today` and `inbox` are exclusive. Moving to Inbox clears `dueDate`; setting a due date on or before the local date moves the task to Today.
+- `in_progress`, `today`, and `inbox` are exclusive. In Progress holds at most three active tasks. Moving to Inbox clears `dueDate`; setting a due date on or before the local date moves an Inbox task to Today.
 - Sort by bucket, then high before low, then bytewise `orderKey`, then UUID. Do not add a list-wide order-key rebalance.
 - `{bucket, due_date}` is the single remote `schedule` register. PostgreSQL JSON uses `due_date`; public Rust/TypeScript task objects serialize as `dueDate`.
 - Preferences and Supabase credentials stay device-local. Hosted access uses only a publishable/anonymous key, never a service-role key.
@@ -38,4 +38,5 @@ The dev-app production build sets `CI=true` so Tauri skips its temporary Finder-
 - Keep the package versions exact. Before installing or upgrading any package, verify that release is at least 48 hours old.
 - Preserve app identifier `com.magicproduct.todou`; it determines both the native data directory and MCP socket path.
 - Test domain behavior through the real temporary SQLite service and Supabase RPCs. Do not mock away transactions, HLC merge, cursor movement, or idempotency.
+- Supabase identifies applied migrations by timestamp; never reuse a migration timestamp across branches.
 - Keep detailed sync diagnostics out of the primary UI. The sidebar may show compact connection health; counts and errors belong in Settings/commands.

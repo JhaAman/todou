@@ -27,6 +27,11 @@ interface TaskRowProps {
   onToggleArea: () => void;
   onDelete: () => void;
   onDropTask: (movingId: string, targetId: string, edge: "before" | "after") => void;
+  canAcceptDrop?: (movingId: string) => boolean;
+  onDropRejected?: () => void;
+  draggedTaskId?: string | null;
+  onTaskDragStart?: (id: string) => void;
+  onTaskDragEnd?: () => void;
   shortcuts: Record<ShortcutAction, string>;
 }
 
@@ -46,8 +51,9 @@ function prettyDate(value: string): string {
 
 type ContextMenuPosition = { left: number; top: number };
 
-export function TaskRow({ task, selected, semanticRole = "option", onSelect, onComplete, onRestore, onMove, onTogglePriority, onToggleArea, onDelete, onDropTask, shortcuts }: TaskRowProps) {
+export function TaskRow({ task, selected, semanticRole = "option", onSelect, onComplete, onRestore, onMove, onTogglePriority, onToggleArea, onDelete, onDropTask, canAcceptDrop, onDropRejected, draggedTaskId, onTaskDragStart, onTaskDragEnd, shortcuts }: TaskRowProps) {
   const [dropEdge, setDropEdge] = useState<"before" | "after" | null>(null);
+  const [invalidDrop, setInvalidDrop] = useState(false);
   const [menuPosition, setMenuPosition] = useState<ContextMenuPosition | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -76,19 +82,31 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
     action();
   };
 
+  const acceptsDrop = (movingId?: string | null) => (
+    !movingId || movingId === task.id || (canAcceptDrop?.(movingId) ?? true)
+  );
+
   const onDragOver = (event: DragEvent<HTMLDivElement>) => {
     if (task.completedAt) return;
     event.preventDefault();
+    const movingId = event.dataTransfer.getData(taskDragType) || draggedTaskId;
+    const accepted = acceptsDrop(movingId);
+    event.dataTransfer.dropEffect = accepted ? "move" : "none";
     const bounds = event.currentTarget.getBoundingClientRect();
     setDropEdge(event.clientY < bounds.top + bounds.height / 2 ? "before" : "after");
+    setInvalidDrop(!accepted);
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    const movingId = event.dataTransfer.getData(taskDragType);
-    if (movingId && movingId !== task.id && dropEdge) onDropTask(movingId, task.id, dropEdge);
+    const movingId = event.dataTransfer.getData(taskDragType) || draggedTaskId;
+    if (movingId && movingId !== task.id && dropEdge) {
+      if (acceptsDrop(movingId)) onDropTask(movingId, task.id, dropEdge);
+      else onDropRejected?.();
+    }
     setDropEdge(null);
+    setInvalidDrop(false);
   };
 
   const runMenuAction = (event: MouseEvent<HTMLButtonElement>, action: () => void) => {
@@ -123,7 +141,7 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
 
   return (
     <div
-      className={`task-row area-${task.area} ${task.priority === "high" ? "is-high" : ""} ${selected ? "is-selected" : ""} ${task.completedAt ? "is-completed" : ""} ${dropEdge ? "is-task-drop-target" : ""}`}
+      className={`task-row area-${task.area} ${task.priority === "high" ? "is-high" : ""} ${selected ? "is-selected" : ""} ${task.completedAt ? "is-completed" : ""} ${dropEdge && !invalidDrop ? "is-task-drop-target" : ""} ${invalidDrop ? "is-task-drop-invalid" : ""}`}
       role={semanticRole}
       aria-selected={semanticRole === "option" ? selected : undefined}
       aria-current={semanticRole === "listitem" && selected ? "true" : undefined}
@@ -149,10 +167,18 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData(taskDragType, task.id);
+        onTaskDragStart?.(task.id);
       }}
-      onDragEnd={() => setDropEdge(null)}
+      onDragEnd={() => {
+        setDropEdge(null);
+        setInvalidDrop(false);
+        onTaskDragEnd?.();
+      }}
       onDragOver={onDragOver}
-      onDragLeave={() => setDropEdge(null)}
+      onDragLeave={() => {
+        setDropEdge(null);
+        setInvalidDrop(false);
+      }}
       onDrop={onDrop}
     >
       <span className="area-rail" aria-hidden="true" />

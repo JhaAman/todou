@@ -31,6 +31,7 @@ export interface BrowserSyncDiagnostics {
 export type SyncDiagnostics = NativeSyncDiagnostics | BrowserSyncDiagnostics;
 
 export const emptySyncSettings: SyncSettings = { url: "", publishableKey: "" };
+const supportedProtocolVersion = 2;
 
 export function normalizeSyncSettings(settings: SyncSettings): SyncSettings {
   const url = settings.url.trim().replace(/\/+$/, "");
@@ -125,14 +126,14 @@ export async function checkSupabaseConnection(
     }
     const record = payload as Record<string, unknown>;
     if (
-      record.protocol_version !== 1
+      record.protocol_version !== supportedProtocolVersion
       || typeof record.epoch !== "string"
       || !record.epoch
       || !Number.isSafeInteger(record.watermark)
       || (record.watermark as number) < 0
       || !Array.isArray(record.tasks)
     ) {
-      throw new Error("Supabase returned an invalid bootstrap payload for Todou protocol 1.");
+      throw new Error(`Supabase returned an invalid bootstrap payload for Todou protocol ${supportedProtocolVersion}.`);
     }
 
     const hostname = new URL(normalized.url).hostname.toLocaleLowerCase();
@@ -141,7 +142,7 @@ export async function checkSupabaseConnection(
       : "hosted";
     return {
       target,
-      protocolVersion: 1,
+      protocolVersion: supportedProtocolVersion,
       epoch: record.epoch,
       watermark: record.watermark as number,
       taskCount: record.tasks.length,

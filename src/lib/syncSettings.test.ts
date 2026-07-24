@@ -28,7 +28,7 @@ describe("sync settings", () => {
 
   it("checks the read-only bootstrap contract and identifies a local project", async () => {
     const request = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: 1,
+      protocol_version: 2,
       epoch: "84cfc657-b08f-403a-bab1-915c705f969b",
       watermark: 12,
       tasks: [{ id: "task-1" }, { id: "task-2" }],
@@ -39,7 +39,7 @@ describe("sync settings", () => {
       publishableKey: "local-key",
     }, request)).resolves.toEqual({
       target: "local",
-      protocolVersion: 1,
+      protocolVersion: 2,
       epoch: "84cfc657-b08f-403a-bab1-915c705f969b",
       watermark: 12,
       taskCount: 2,
@@ -75,7 +75,7 @@ describe("sync settings", () => {
 
   it("identifies hosted projects and rejects an invalid bootstrap payload", async () => {
     const hostedRequest = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: 1,
+      protocol_version: 2,
       epoch: "hosted-epoch",
       watermark: 0,
       tasks: [],
