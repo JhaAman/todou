@@ -98,17 +98,20 @@ async function prepareFakeProductionApp(home: string) {
 
 async function checkMcp(launcher: string, home: string) {
   await prepareFakeProductionApp(home);
-  const process = Bun.spawn(["/bin/bash", launcher], {
-    env: { ...globalThis.process.env, HOME: home },
+  const server = Bun.spawn(["/bin/bash", launcher], {
+    env: { ...process.env, HOME: home },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "inherit",
   });
 
   let buffer = "";
-  const pending = new Map<number, (message: JsonObject) => void>();
+  const pending = new Map<
+    number,
+    { resolve: (message: JsonObject) => void; timeout: ReturnType<typeof setTimeout> }
+  >();
   let nextId = 0;
-  const reader = process.stdout.getReader();
+  const reader = server.stdout.getReader();
   const decoder = new TextDecoder();
 
   const readLoop = (async () => {
@@ -124,8 +127,12 @@ async function checkMcp(launcher: string, home: string) {
           const message = JSON.parse(line) as JsonObject;
           const id = message.id;
           if (typeof id === "number") {
-            pending.get(id)?.(message);
-            pending.delete(id);
+            const request = pending.get(id);
+            if (request) {
+              clearTimeout(request.timeout);
+              request.resolve(message);
+              pending.delete(id);
+            }
           }
         }
         newline = buffer.indexOf("\n");
@@ -136,13 +143,13 @@ async function checkMcp(launcher: string, home: string) {
   const request = (method: string, params: JsonObject) =>
     new Promise<JsonObject>((resolve, reject) => {
       const id = ++nextId;
-      pending.set(id, resolve);
-      process.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
-      setTimeout(() => {
+      const timeout = setTimeout(() => {
         if (pending.delete(id)) {
           reject(new Error(`Timed out waiting for ${method}`));
         }
       }, 10_000);
+      pending.set(id, { resolve, timeout });
+      server.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     });
 
   try {
@@ -154,7 +161,7 @@ async function checkMcp(launcher: string, home: string) {
     const initializeResult = initialized.result as JsonObject | undefined;
     const serverInfo = initializeResult?.serverInfo as JsonObject | undefined;
     assert(serverInfo?.name === "todou", "Installed launcher did not initialize the Todou MCP server");
-    process.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n");
+    server.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n");
 
     const listed = await request("tools/list", {});
     const toolsResult = listed.result as JsonObject | undefined;
@@ -164,7 +171,7 @@ async function checkMcp(launcher: string, home: string) {
       assert(names.has(name), `Installed launcher is missing ${name}`);
     }
   } finally {
-    process.kill();
+    server.kill();
     await readLoop;
   }
 }
