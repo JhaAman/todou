@@ -1,15 +1,17 @@
 mod commands;
+mod dedupe;
 pub mod domain;
 pub mod error;
 pub mod hlc;
 mod lifecycle;
+mod llm;
 pub mod order_key;
 pub mod protocol;
 pub mod service;
 mod socket;
 pub mod sync;
 
-use crate::{service::TaskService, sync::SyncWake};
+use crate::{dedupe::DedupeCoordinator, service::TaskService, sync::SyncWake};
 use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -48,9 +50,11 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             let service = TaskService::open(data_dir.join("todou.sqlite3"))?;
             let wake = SyncWake::default();
+            let dedupe = DedupeCoordinator::new()?;
             let socket_path = data_dir.join("todou.sock");
             app.manage(service.clone());
             app.manage(wake.clone());
+            app.manage(dedupe);
             let socket_app = app.handle().clone();
             let socket_wake = wake.clone();
             let socket_service = service.clone();
@@ -73,6 +77,11 @@ pub fn run() {
             WindowEvent::Focused(false) if window.label() == "quick-entry" => {
                 let _ = window.hide();
             }
+            WindowEvent::Focused(true) if window.label() == "main" => {
+                let app = window.app_handle();
+                app.state::<DedupeCoordinator>()
+                    .schedule(app.clone(), app.state::<TaskService>().inner().clone());
+            }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
@@ -93,6 +102,12 @@ pub fn run() {
             commands::get_preferences,
             commands::set_preference,
             commands::set_sync_settings,
+            commands::get_llm_settings,
+            commands::save_llm_settings,
+            commands::process_pending_dedupe,
+            commands::list_dedupe_suggestions,
+            commands::dismiss_dedupe_suggestion,
+            commands::resolve_dedupe_suggestion,
             commands::next_outbox,
             commands::ack_outbox,
             commands::apply_remote_page,
@@ -111,6 +126,8 @@ pub fn run() {
     app.run(|app, event| {
         if let RunEvent::Reopen { .. } = event {
             let _ = lifecycle::show_main(app);
+            app.state::<DedupeCoordinator>()
+                .schedule(app.clone(), app.state::<TaskService>().inner().clone());
         }
     });
 }

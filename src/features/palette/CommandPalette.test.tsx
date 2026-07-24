@@ -17,6 +17,7 @@ function renderPalette(
     onNewTask: vi.fn(),
     onExport: vi.fn(),
     onOpenSettings: vi.fn(),
+    onOpenAiSettings: vi.fn(),
     selectedTask: null,
     canUndo: false,
     onCompleteSelected: vi.fn(),
@@ -78,6 +79,16 @@ describe("command palette", () => {
     fireEvent.click(screen.getByRole("option", { name: /Connection settings/i }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(onOpenSettings).toHaveBeenCalledOnce();
+  });
+
+  it("opens AI settings through a real command", () => {
+    const onOpenChange = vi.fn();
+    const onOpenAiSettings = vi.fn();
+    renderPalette("commands", { onOpenChange, onOpenAiSettings });
+
+    fireEvent.click(screen.getByRole("option", { name: /AI de-duplication settings/i }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenAiSettings).toHaveBeenCalledOnce();
   });
 
   it("offers the development installer command only when its native callback exists", () => {
