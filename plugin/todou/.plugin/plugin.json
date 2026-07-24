@@ -1,6 +1,5 @@
 {
   "name": "todou",
-  "version": "0.1.0",
   "description": "Read and manage tasks in the local Todou production app.",
   "author": {
     "name": "Aman Jha"
