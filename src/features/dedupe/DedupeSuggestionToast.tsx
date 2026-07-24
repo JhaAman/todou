@@ -1,5 +1,6 @@
 import { GitMerge, Sparkles, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { readErrorMessage } from "../../lib/taskClient";
 import type { DedupeResolutionAction, DedupeSuggestion } from "../../lib/taskClient";
 
 interface DedupeSuggestionToastProps {
@@ -24,17 +25,12 @@ function formatDueDate(dueDate: string | null): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-function isWindowActive(): boolean {
-  return document.visibilityState !== "hidden" && document.hasFocus();
-}
-
 export function DedupeSuggestionToast({
   suggestion,
   onDismiss,
   onResolve,
 }: DedupeSuggestionToastProps) {
   const [pinned, setPinned] = useState(false);
-  const [windowActive, setWindowActive] = useState(isWindowActive);
   const [busyAction, setBusyAction] = useState<DedupeResolutionAction | "dismiss" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const dismissRef = useRef(onDismiss);
@@ -48,30 +44,16 @@ export function DedupeSuggestionToast({
   }, [suggestion.id]);
 
   useEffect(() => {
-    const handleFocus = () => setWindowActive(isWindowActive());
-    const handleBlur = () => setWindowActive(false);
-    const handleVisibility = () => setWindowActive(isWindowActive());
-    window.addEventListener("focus", handleFocus);
-    window.addEventListener("blur", handleBlur);
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      window.removeEventListener("focus", handleFocus);
-      window.removeEventListener("blur", handleBlur);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (pinned || !windowActive) return;
+    if (pinned) return;
     const timer = window.setTimeout(() => {
       setBusyAction("dismiss");
       void dismissRef.current().catch((reason) => {
         setBusyAction(null);
-        setError(reason instanceof Error ? reason.message : "Could not dismiss this suggestion.");
+        setError(readErrorMessage(reason, "Could not dismiss this suggestion."));
       });
     }, 30_000);
     return () => window.clearTimeout(timer);
-  }, [pinned, suggestion.id, windowActive]);
+  }, [pinned, suggestion.id]);
 
   const pin = useCallback(() => {
     setPinned(true);
@@ -85,7 +67,7 @@ export function DedupeSuggestionToast({
       await onDismiss();
     } catch (reason) {
       setBusyAction(null);
-      setError(reason instanceof Error ? reason.message : "Could not dismiss this suggestion.");
+      setError(readErrorMessage(reason, "Could not dismiss this suggestion."));
     }
   }, [busyAction, onDismiss]);
 
@@ -97,7 +79,7 @@ export function DedupeSuggestionToast({
       await onResolve(action);
     } catch (reason) {
       setBusyAction(null);
-      setError(reason instanceof Error ? reason.message : "The tasks changed. Todou will check them again.");
+      setError(readErrorMessage(reason, "Could not resolve this duplicate suggestion."));
     }
   }, [busyAction, onResolve]);
 
@@ -117,13 +99,7 @@ export function DedupeSuggestionToast({
         <span className="dedupe-spark"><Sparkles size={15} /></span>
         <div>
           <strong>These tasks look alike</strong>
-          <span>
-            {pinned
-              ? "Waiting for your choice"
-              : windowActive
-                ? "Dismisses in 30 seconds"
-                : "Timer paused"}
-          </span>
+          <span>{pinned ? "Waiting for your choice" : "Dismisses in 30 seconds"}</span>
         </div>
         <button
           type="button"
@@ -197,7 +173,7 @@ export function DedupeSuggestionToast({
           <GitMerge size={13} />{busyAction === "merge" ? "Merging…" : "Merge"}
         </button>
       </footer>
-      {!pinned && windowActive && <span className="dedupe-timer" aria-hidden="true" />}
+      {!pinned && <span className="dedupe-timer" aria-hidden="true" />}
     </section>
   );
 }

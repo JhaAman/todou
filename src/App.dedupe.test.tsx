@@ -173,6 +173,34 @@ describe("App AI de-duplication lifecycle", () => {
     await waitFor(() => expect(mocks.processPendingDedupe).toHaveBeenCalledOnce());
   });
 
+  it("retries wake listener setup on focus without leaking a partial subscription", async () => {
+    mocks.isFocused.mockResolvedValue(false);
+    const suggestionCleanups: Array<ReturnType<typeof vi.fn>> = [];
+    mocks.subscribeDedupeSuggestions.mockImplementation(async (listener: () => void) => {
+      mocks.listeners.set("todou://dedupe-suggestions-changed", listener);
+      const cleanup = vi.fn(() => {
+        mocks.listeners.delete("todou://dedupe-suggestions-changed");
+      });
+      suggestionCleanups.push(cleanup);
+      return cleanup;
+    });
+    mocks.subscribeLlmCredentialsRequired.mockRejectedValueOnce(
+      new Error("listener unavailable"),
+    );
+    render(<App />);
+
+    await waitFor(() => expect(suggestionCleanups[0]).toHaveBeenCalledOnce());
+    expect(mocks.listeners.has("todou://dedupe-suggestions-changed")).toBe(false);
+    mocks.isFocused.mockResolvedValue(true);
+
+    act(() => window.dispatchEvent(new FocusEvent("focus")));
+
+    await waitFor(() => expect(mocks.subscribeLlmCredentialsRequired).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.processPendingDedupe).toHaveBeenCalledOnce());
+    expect(mocks.listeners.has("todou://dedupe-suggestions-changed")).toBe(true);
+    expect(mocks.listeners.has("todou://llm-credentials-required")).toBe(true);
+  });
+
   it("opens AI settings when startup finds queued work with no provider", async () => {
     llmStatus = {
       openai: { configured: false, source: null },

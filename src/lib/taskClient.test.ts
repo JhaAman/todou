@@ -97,6 +97,17 @@ describe("sync diagnostics client", () => {
 });
 
 describe("AI de-duplication client", () => {
+  it("reads messages from native serialized errors", async () => {
+    const { readErrorMessage } = await import("./taskClient");
+
+    expect(readErrorMessage(
+      { code: "invalid_transition", message: "In Progress is full" },
+      "Fallback",
+    )).toBe("In Progress is full");
+    expect(readErrorMessage("Provider unavailable", "Fallback")).toBe("Provider unavailable");
+    expect(readErrorMessage({ code: "unknown" }, "Fallback")).toBe("Fallback");
+  });
+
   it("keeps the browser preview native-only and never persists API keys", async () => {
     localStorage.clear();
     const { taskClient } = await import("./taskClient");

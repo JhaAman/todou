@@ -12,9 +12,7 @@ pub const ANTHROPIC_MODEL: &str = "claude-haiku-4-5-20251001";
 pub const MAX_LOGBOOK_CONTEXT_TASKS: usize = 50;
 
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
-const OPENAI_MODEL_URL: &str = "https://api.openai.com/v1/models/gpt-5-mini";
 const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL_URL: &str = "https://api.anthropic.com/v1/models/claude-haiku-4-5-20251001";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_OUTPUT_TOKENS: u16 = 1_000;
@@ -241,11 +239,13 @@ impl LlmClient {
             ));
         }
 
+        let request = self
+            .client
+            .post(validation_endpoint(provider))
+            .json(&validation_request_body(provider));
         let request = match provider {
-            Provider::OpenAi => self.client.get(OPENAI_MODEL_URL).bearer_auth(api_key),
-            Provider::Anthropic => self
-                .client
-                .get(ANTHROPIC_MODEL_URL)
+            Provider::OpenAi => request.bearer_auth(api_key),
+            Provider::Anthropic => request
                 .header("x-api-key", api_key)
                 .header("anthropic-version", ANTHROPIC_VERSION),
         };
@@ -309,6 +309,33 @@ impl LlmClient {
     }
 }
 
+fn validation_endpoint(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => OPENAI_RESPONSES_URL,
+        Provider::Anthropic => ANTHROPIC_MESSAGES_URL,
+    }
+}
+
+fn validation_request_body(provider: Provider) -> Value {
+    match provider {
+        Provider::OpenAi => json!({
+            "model": OPENAI_MODEL,
+            "store": false,
+            "max_output_tokens": 16,
+            "reasoning": { "effort": "minimal" },
+            "input": "Reply with OK.",
+        }),
+        Provider::Anthropic => json!({
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 1,
+            "messages": [{
+                "role": "user",
+                "content": "Reply with OK.",
+            }],
+        }),
+    }
+}
+
 async fn parse_http_response(
     response: reqwest::Response,
     parse_success: impl FnOnce(&[u8]) -> Result<DedupeDecision, FailureCategory>,
@@ -363,7 +390,7 @@ fn anthropic_request_body(request: &DedupeRequest) -> Result<Value, FailureCateg
     }))
 }
 
-fn encoded_provider_input(request: &DedupeRequest) -> Result<String, FailureCategory> {
+pub(crate) fn encoded_provider_input(request: &DedupeRequest) -> Result<String, FailureCategory> {
     serde_json::to_string(&provider_input(request)).map_err(|_| FailureCategory::JobSpecific)
 }
 
@@ -1003,6 +1030,24 @@ mod tests {
                 "Anthropic raw schemas must omit unsupported constraint {unsupported}"
             );
         }
+    }
+
+    #[test]
+    fn key_validation_uses_each_provider_inference_contract() {
+        let openai = validation_request_body(Provider::OpenAi);
+        let anthropic = validation_request_body(Provider::Anthropic);
+
+        assert_eq!(validation_endpoint(Provider::OpenAi), OPENAI_RESPONSES_URL);
+        assert_eq!(
+            validation_endpoint(Provider::Anthropic),
+            ANTHROPIC_MESSAGES_URL
+        );
+        assert_eq!(openai["model"], OPENAI_MODEL);
+        assert_eq!(openai["store"], false);
+        assert_eq!(openai["input"], "Reply with OK.");
+        assert_eq!(anthropic["model"], ANTHROPIC_MODEL);
+        assert_eq!(anthropic["max_tokens"], 1);
+        assert_eq!(anthropic["messages"][0]["role"], "user");
     }
 
     #[test]

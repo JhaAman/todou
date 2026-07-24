@@ -186,10 +186,6 @@ export default function App() {
     let listenersReady = false;
     const cleanups: Array<() => void> = [];
 
-    const handleFocus = () => {
-      if (!listenersReady) return;
-      void processFocusedDedupe().catch(() => undefined);
-    };
     const handleSuggestionsChanged = () => {
       void reloadDedupeSuggestions().catch(() => undefined);
       void reloadLlmSettings().catch(() => undefined);
@@ -198,21 +194,28 @@ export default function App() {
       setAiSettingsOpen(true);
       void reloadLlmSettings().catch(() => undefined);
     };
-
-    window.addEventListener("focus", handleFocus);
-    void (async () => {
-      try {
-        const [unsubscribeSuggestions, unsubscribeCredentials] = await Promise.all([
+    let initializing: Promise<void> | null = null;
+    const initialize = () => {
+      if (listenersReady) return Promise.resolve();
+      if (initializing) return initializing;
+      initializing = (async () => {
+        const results = await Promise.allSettled([
           taskClient.subscribeDedupeSuggestions(handleSuggestionsChanged),
           taskClient.subscribeLlmCredentialsRequired(handleCredentialsRequired),
         ]);
+        const subscriptions = results.flatMap((result) => (
+          result.status === "fulfilled" ? [result.value] : []
+        ));
         if (disposed) {
-          unsubscribeSuggestions();
-          unsubscribeCredentials();
+          subscriptions.forEach((cleanup) => cleanup());
           return;
         }
-        cleanups.push(unsubscribeSuggestions, unsubscribeCredentials);
-        listenersReady = true;
+        if (results.some((result) => result.status === "rejected")) {
+          subscriptions.forEach((cleanup) => cleanup());
+        } else {
+          cleanups.push(...subscriptions);
+          listenersReady = true;
+        }
         await Promise.all([
           reloadDedupeSuggestions(),
           reloadLlmSettings(),
@@ -221,11 +224,23 @@ export default function App() {
         if (!disposed && await getCurrentWindow().isFocused()) {
           await processFocusedDedupe();
         }
-      } catch {
+      })().catch(() => {
         // Rust keeps the queue durable; the next focus gets another chance.
+      }).finally(() => {
+        initializing = null;
+      });
+      return initializing;
+    };
+    const handleFocus = () => {
+      if (listenersReady) {
+        void processFocusedDedupe().catch(() => undefined);
+      } else {
+        void initialize();
       }
-    })();
+    };
 
+    window.addEventListener("focus", handleFocus);
+    void initialize();
     return () => {
       disposed = true;
       window.removeEventListener("focus", handleFocus);

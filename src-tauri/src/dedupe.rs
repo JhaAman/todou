@@ -3,7 +3,7 @@ use crate::{
     error::{AppError, AppResult},
     llm::{
         DedupeDecision, DedupeRequest, FailureCategory, LlmClient, LlmTask, Provider,
-        ProviderCredentials,
+        ProviderCredentials, MAX_LOGBOOK_CONTEXT_TASKS,
     },
     service::{DedupeContext, LlmCredentialStatus, TaskService},
 };
@@ -13,6 +13,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 const CANDIDATES_PER_REQUEST: usize = 250;
+const MAX_PROVIDER_INPUT_BYTES: usize = 150_000;
+const MAX_LOGBOOK_INPUT_BYTES: usize = 50_000;
+const PROVIDER_INPUT_OVERHEAD_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -258,24 +261,14 @@ impl DedupeCoordinator {
             .iter()
             .map(|snapshot| LlmTask::from(&snapshot.task))
             .collect::<Vec<_>>();
-        let chunks = context
+        let active_tasks = context
             .active_candidates
-            .chunks(CANDIDATES_PER_REQUEST)
+            .iter()
+            .map(|snapshot| LlmTask::from(&snapshot.task))
             .collect::<Vec<_>>();
+        let requests = build_requests(new_task, active_tasks, logbook_tasks)?;
 
-        if chunks.is_empty() {
-            return Ok(None);
-        }
-
-        for candidates in chunks {
-            let request = DedupeRequest {
-                new_task: new_task.clone(),
-                active_tasks: candidates
-                    .iter()
-                    .map(|snapshot| LlmTask::from(&snapshot.task))
-                    .collect(),
-                logbook_tasks: logbook_tasks.clone(),
-            };
+        for request in requests {
             let decision = self
                 .client
                 .reconcile(&request, credentials)
@@ -284,7 +277,8 @@ impl DedupeCoordinator {
             let Some(existing_id) = decision.duplicate_task_id.as_deref() else {
                 continue;
             };
-            let existing_fingerprint = candidates
+            let existing_fingerprint = context
+                .active_candidates
                 .iter()
                 .find(|snapshot| snapshot.task.id == existing_id)
                 .map(|snapshot| snapshot.fingerprint.clone())
@@ -294,6 +288,65 @@ impl DedupeCoordinator {
 
         Ok(None)
     }
+}
+
+fn build_requests(
+    new_task: LlmTask,
+    active_tasks: Vec<LlmTask>,
+    logbook_tasks: Vec<LlmTask>,
+) -> Result<Vec<DedupeRequest>, FailureCategory> {
+    let mut bounded_logbook = Vec::new();
+    let mut logbook_bytes = 0_usize;
+    for task in logbook_tasks.into_iter().take(MAX_LOGBOOK_CONTEXT_TASKS) {
+        let task_bytes = encoded_task_bytes(&task)?;
+        if logbook_bytes.saturating_add(task_bytes).saturating_add(1) > MAX_LOGBOOK_INPUT_BYTES {
+            continue;
+        }
+        logbook_bytes = logbook_bytes.saturating_add(task_bytes).saturating_add(1);
+        bounded_logbook.push(task);
+    }
+
+    let base_bytes = PROVIDER_INPUT_OVERHEAD_BYTES
+        .saturating_add(encoded_task_bytes(&new_task)?)
+        .saturating_add(logbook_bytes);
+    let mut requests = Vec::new();
+    let mut batch = Vec::new();
+    let mut batch_bytes = base_bytes;
+
+    for task in active_tasks {
+        let task_bytes = encoded_task_bytes(&task)?.saturating_add(1);
+        if !batch.is_empty()
+            && (batch.len() >= CANDIDATES_PER_REQUEST
+                || batch_bytes.saturating_add(task_bytes) > MAX_PROVIDER_INPUT_BYTES)
+        {
+            requests.push(DedupeRequest {
+                new_task: new_task.clone(),
+                active_tasks: std::mem::take(&mut batch),
+                logbook_tasks: bounded_logbook.clone(),
+            });
+            batch_bytes = base_bytes;
+        }
+        if batch_bytes.saturating_add(task_bytes) > MAX_PROVIDER_INPUT_BYTES {
+            return Err(FailureCategory::JobSpecific);
+        }
+        batch_bytes = batch_bytes.saturating_add(task_bytes);
+        batch.push(task);
+    }
+
+    if !batch.is_empty() {
+        requests.push(DedupeRequest {
+            new_task,
+            active_tasks: batch,
+            logbook_tasks: bounded_logbook,
+        });
+    }
+    Ok(requests)
+}
+
+fn encoded_task_bytes(task: &LlmTask) -> Result<usize, FailureCategory> {
+    serde_json::to_vec(task)
+        .map(|encoded| encoded.len())
+        .map_err(|_| FailureCategory::JobSpecific)
 }
 
 fn normalize_key_patch(patch: NullablePatch<String>) -> AppResult<Option<Option<String>>> {
@@ -342,6 +395,19 @@ pub fn emit_suggestions_changed(app: &AppHandle) {
 mod tests {
     use super::*;
 
+    fn task(id: impl Into<String>, description: String) -> LlmTask {
+        LlmTask {
+            id: id.into(),
+            title: "A bounded task".into(),
+            description,
+            bucket: crate::domain::Bucket::Inbox,
+            priority: crate::domain::Priority::Low,
+            area: crate::domain::Area::Work,
+            due_date: None,
+            estimate_minutes: None,
+        }
+    }
+
     #[test]
     fn key_patch_distinguishes_keep_clear_and_replace() {
         let keep: SaveLlmSettingsInput = serde_json::from_value(serde_json::json!({})).unwrap();
@@ -356,5 +422,40 @@ mod tests {
             normalize_key_patch(replace.anthropic_api_key).unwrap(),
             Some(Some("secret".to_owned()))
         );
+    }
+
+    #[test]
+    fn provider_requests_are_byte_bounded_without_skipping_candidates() {
+        let large_description = "😀".repeat(10_000);
+        let new_task = task("new", large_description.clone());
+        let active_tasks = (0..8)
+            .map(|index| task(format!("candidate-{index}"), large_description.clone()))
+            .collect::<Vec<_>>();
+        let expected_ids = active_tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        let logbook_tasks = (0..3)
+            .map(|index| task(format!("history-{index}"), large_description.clone()))
+            .collect::<Vec<_>>();
+
+        let requests = build_requests(new_task, active_tasks, logbook_tasks).unwrap();
+
+        assert!(requests.len() > 1);
+        assert!(!requests[0].logbook_tasks.is_empty());
+        assert_eq!(
+            requests
+                .iter()
+                .flat_map(|request| request.active_tasks.iter())
+                .map(|task| task.id.clone())
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
+        for request in requests {
+            assert!(
+                crate::llm::encoded_provider_input(&request).unwrap().len()
+                    <= MAX_PROVIDER_INPUT_BYTES
+            );
+        }
     }
 }

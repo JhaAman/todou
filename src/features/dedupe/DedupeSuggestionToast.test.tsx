@@ -75,7 +75,7 @@ describe("dedupe suggestion toast", () => {
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
-  it("does not count down while the main window is hidden", () => {
+  it("keeps counting down while the main window is hidden", () => {
     const onDismiss = vi.fn(async () => undefined);
     render(
       <DedupeSuggestionToast
@@ -86,15 +86,13 @@ describe("dedupe suggestion toast", () => {
     );
 
     act(() => window.dispatchEvent(new FocusEvent("blur")));
-    act(() => vi.advanceTimersByTime(60_000));
+    act(() => vi.advanceTimersByTime(29_999));
     expect(onDismiss).not.toHaveBeenCalled();
-
-    act(() => window.dispatchEvent(new FocusEvent("focus")));
-    act(() => vi.advanceTimersByTime(30_000));
+    act(() => vi.advanceTimersByTime(1));
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
-  it("does not start counting down when mounted after focus was already lost", () => {
+  it("starts counting down when mounted after focus was already lost", () => {
     vi.mocked(document.hasFocus).mockReturnValue(false);
     const onDismiss = vi.fn(async () => undefined);
     render(
@@ -105,11 +103,6 @@ describe("dedupe suggestion toast", () => {
       />,
     );
 
-    act(() => vi.advanceTimersByTime(60_000));
-    expect(onDismiss).not.toHaveBeenCalled();
-
-    vi.mocked(document.hasFocus).mockReturnValue(true);
-    act(() => window.dispatchEvent(new FocusEvent("focus")));
     act(() => vi.advanceTimersByTime(30_000));
     expect(onDismiss).toHaveBeenCalledOnce();
   });
@@ -190,6 +183,30 @@ describe("dedupe suggestion toast", () => {
 
     fireEvent.click(screen.getByRole("button", { name: buttonName }));
     expect(onResolve).toHaveBeenCalledWith(action);
+  });
+
+  it("shows the message from a serialized native resolution error", async () => {
+    const onResolve = vi.fn(async () => {
+      throw {
+        code: "invalid_transition",
+        message: "In Progress can only contain three active tasks",
+      };
+    });
+    render(
+      <DedupeSuggestionToast
+        suggestion={suggestion()}
+        onDismiss={vi.fn(async () => undefined)}
+        onResolve={onResolve}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Merge tasks" }));
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "In Progress can only contain three active tasks",
+    );
   });
 
   it("advances to the next durable suggestion after resolving the first", async () => {

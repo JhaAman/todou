@@ -63,6 +63,25 @@ describe("AI settings dialog", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ openaiApiKey: null }));
   });
 
+  it("shows the message from a serialized native validation error", async () => {
+    const onSave = vi.fn(async () => {
+      throw {
+        code: "invalid_input",
+        message: "The OpenAI API key could not be verified",
+      };
+    });
+    renderDialog({ onSave });
+
+    fireEvent.change(screen.getByLabelText("OpenAI API key"), {
+      target: { value: "sk-invalid" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save AI settings" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The OpenAI API key could not be verified",
+    );
+  });
+
   it("keeps API keys out of browser storage and disables editing in browser preview", () => {
     renderDialog({
       runtime: "browser",

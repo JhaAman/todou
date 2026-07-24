@@ -1,6 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { BrainCircuit, KeyRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { readErrorMessage } from "../../lib/taskClient";
 import type {
   LlmSettingsStatus,
   ProviderCredentialStatus,
@@ -59,7 +60,7 @@ export function AiSettingsDialog({
       await onSave(input);
       onOpenChange(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not save AI settings.");
+      setError(readErrorMessage(reason, "Could not save AI settings."));
     } finally {
       setSaving(false);
     }

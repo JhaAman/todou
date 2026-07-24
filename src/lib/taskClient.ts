@@ -24,6 +24,21 @@ export interface ExportResult {
   path?: string;
 }
 
+export function readErrorMessage(reason: unknown, fallback: string): string {
+  if (reason instanceof Error && reason.message.trim()) return reason.message;
+  if (typeof reason === "string" && reason.trim()) return reason;
+  if (
+    typeof reason === "object"
+    && reason !== null
+    && "message" in reason
+    && typeof reason.message === "string"
+    && reason.message.trim()
+  ) {
+    return reason.message;
+  }
+  return fallback;
+}
+
 export type ProviderCredentialSource = "saved" | "environment" | null;
 
 export interface ProviderCredentialStatus {
