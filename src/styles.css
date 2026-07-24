@@ -412,6 +412,7 @@ kbd {
 .workspace {
   display: flex;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
   background:
     radial-gradient(ellipse at 55% -10%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 33%),
