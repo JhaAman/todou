@@ -316,14 +316,25 @@ kbd {
 
 .sync-status-bar {
   display: flex;
+  width: calc(100% - 16px);
   min-height: 31px;
   align-items: center;
   gap: 7px;
-  margin-top: auto;
-  padding: 8px 14px 3px;
+  margin: auto 8px 0;
+  padding: 8px 6px 3px;
+  border-radius: 6px;
   color: var(--text-meta);
+  background: transparent;
   font-size: 10px;
+  text-align: left;
 }
+
+.sync-status-bar:hover {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-hover) 58%, transparent);
+}
+
+.sync-status-positioner { z-index: 80; }
 
 .sync-status-dot {
   width: 6px;
@@ -334,15 +345,100 @@ kbd {
   box-shadow: 0 0 0 2px color-mix(in srgb, #55c57a 14%, transparent);
 }
 
-.sync-status-bar.is-updating .sync-status-dot {
+.sync-status-bar.is-updating .sync-status-dot,
+.sync-status-summary.is-updating .sync-status-dot {
   background: var(--orange);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--orange) 14%, transparent);
 }
 
-.sync-status-bar.is-not-connected .sync-status-dot {
+.sync-status-bar.is-not-connected .sync-status-dot,
+.sync-status-summary.is-not-connected .sync-status-dot {
   background: var(--danger);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 14%, transparent);
 }
+
+.sync-status-popover {
+  width: 296px;
+  padding: 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  outline: 0;
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: 0 16px 45px var(--shadow);
+  font-size: 10px;
+}
+
+.sync-status-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.sync-status-summary .sync-status-dot { margin-top: 5px; }
+.sync-status-summary h2 { margin: 0 0 3px; color: var(--text-strong); font-size: 11.5px; font-weight: 680; }
+.sync-status-summary p { margin: 0; color: var(--text-secondary); font-size: 9.5px; line-height: 1.45; }
+.sync-diagnostics-note { margin: 11px 0 0; color: var(--text-meta); }
+
+.sync-diagnostics-error {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 11px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border-radius: 7px;
+  color: var(--danger-fg);
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  line-height: 1.4;
+}
+
+.sync-diagnostics-error strong { color: var(--danger-fg); font-size: 9.5px; }
+.sync-diagnostics-warning { margin: 10px 0 0; color: var(--area-personal-fg); line-height: 1.4; }
+
+.sync-diagnostics-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 12px 0 0;
+}
+
+.sync-diagnostics-grid > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.sync-diagnostics-grid dt { color: var(--text-meta); }
+.sync-diagnostics-grid dd { margin: 0; color: var(--text-secondary); text-align: right; }
+
+.sync-technical-details {
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  color: var(--text-meta);
+}
+
+.sync-technical-details summary { color: var(--text-secondary); cursor: default; }
+.sync-technical-details p { margin: 7px 0 0; line-height: 1.45; }
+.sync-technical-details code { color: var(--text-secondary); font-size: 9px; overflow-wrap: anywhere; user-select: text; }
+
+.sync-status-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 13px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sync-status-actions button {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  font-size: 9.5px;
+}
+
+.sync-status-actions button:hover { color: var(--text); background: var(--surface-hover); }
+.sync-status-actions button:disabled { opacity: .55; }
 
 .sidebar-tool {
   display: flex;

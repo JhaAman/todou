@@ -40,4 +40,4 @@ The dev-app production build uses `scripts/install-macos-app.sh` to install the 
 - Preserve app identifier `com.magicproduct.todou`; it determines both the native data directory and MCP socket path.
 - Test domain behavior through the real temporary SQLite service and Supabase RPCs. Do not mock away transactions, HLC merge, cursor movement, or idempotency.
 - Supabase identifies applied migrations by timestamp; never reuse a migration timestamp across branches.
-- Keep detailed sync diagnostics out of the primary UI. The sidebar may show compact connection health; counts and errors belong in Settings/commands.
+- Keep sync diagnostics compact in the primary UI. The sidebar status may show a lightweight summary; configuration and full diagnostics belong in Settings/commands.

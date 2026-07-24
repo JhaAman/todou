@@ -11,7 +11,7 @@ import { useEffect, useState, type DragEvent } from "react";
 import { KeyHint } from "./KeyHint";
 import { SyncStatusBar } from "./SyncStatusBar";
 import type { ThemeDefinition } from "../lib/themes";
-import type { SyncStatus } from "../lib/syncSettings";
+import type { SyncDiagnostics, SyncStatus } from "../lib/syncSettings";
 import type { Bucket, View } from "../lib/types";
 
 interface SidebarProps {
@@ -27,6 +27,11 @@ interface SidebarProps {
   newTaskShortcut: string;
   commandPaletteShortcut: string;
   syncStatus: SyncStatus;
+  syncConfigured: boolean;
+  syncRuntime: "browser" | "tauri";
+  onLoadSyncDiagnostics: () => Promise<SyncDiagnostics>;
+  onCheckSyncAgain: () => Promise<void>;
+  onOpenSyncSettings: () => void;
 }
 
 const navigation = [
@@ -49,6 +54,11 @@ export function Sidebar({
   newTaskShortcut,
   commandPaletteShortcut,
   syncStatus,
+  syncConfigured,
+  syncRuntime,
+  onLoadSyncDiagnostics,
+  onCheckSyncAgain,
+  onOpenSyncSettings,
 }: SidebarProps) {
   const [dropTarget, setDropTarget] = useState<Bucket | null>(null);
 
@@ -119,7 +129,14 @@ export function Sidebar({
         })}
       </nav>
 
-      <SyncStatusBar status={syncStatus} />
+      <SyncStatusBar
+        status={syncStatus}
+        configured={syncConfigured}
+        runtime={syncRuntime}
+        onLoadDiagnostics={onLoadSyncDiagnostics}
+        onCheckAgain={onCheckSyncAgain}
+        onOpenSettings={onOpenSyncSettings}
+      />
 
       <div className="sidebar-bottom">
         <button className="sidebar-tool theme-tool" onClick={onOpenThemes} aria-label={`Theme: ${theme.name}`} title={`Theme: ${theme.name}`}>
