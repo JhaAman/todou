@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "todou": {
+      "command": "/bin/bash",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/run-production-mcp.sh"
+      ]
+    }
+  }
+}
