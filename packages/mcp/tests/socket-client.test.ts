@@ -1,10 +1,23 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import type { ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TodouLocalClient } from "../src/socket-client";
+import { launchTodou, TodouLocalClient } from "../src/socket-client";
+
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const childProcess =
+    await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...childProcess,
+    default: { ...childProcess, spawn: spawnMock },
+    spawn: spawnMock,
+  };
+});
 
 type Request = {
   id: string;
@@ -16,6 +29,10 @@ const servers: Server[] = [];
 const directories: string[] = [];
 
 afterEach(async () => {
+  delete process.env.TODOU_APP_BUNDLE_PATH;
+  delete process.env.TODOU_APP_PATH;
+  vi.restoreAllMocks();
+  spawnMock.mockReset();
   await Promise.all(
     servers.splice(0).map(
       (server) =>
@@ -63,6 +80,38 @@ async function listen(
 }
 
 describe("TodouLocalClient", () => {
+  it("delegates a configured app executable launch to its exact bundle", () => {
+    process.env.TODOU_APP_PATH =
+      "/Applications/Todou.app/Contents/MacOS/todou";
+    const child = { once: vi.fn(), unref: vi.fn() };
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    launchTodou();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/bin/open",
+      [
+        "-gj",
+        "/Applications/Todou.app",
+        "--args",
+        "--background",
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    expect(child.unref).toHaveBeenCalledOnce();
+  });
+
+  it("does not substitute another app for an invalid configured path", () => {
+    process.env.TODOU_APP_PATH = "/tmp/todou";
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    launchTodou();
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledOnce();
+    error.mockRestore();
+  });
+
   it("sends one JSON-line request and preserves the revision envelope", async () => {
     let received: Request | undefined;
     const socketPath = await listen((request) => {

@@ -4,6 +4,7 @@
 
 - The resident Tauri process is the only SQLite writer. React uses Tauri IPC; the MCP stdio bridge uses the owner-only Unix socket at `~/Library/Application Support/com.magicproduct.todou/todou.sock`.
 - The root `marketplace.json` indexes the small cross-agent bundle under `plugin/todou`. Its MCP launcher must target the installed production app, support both `~/Applications` and `/Applications`, and use `${PLUGIN_ROOT}` so the `plugins` CLI can translate paths for each agent.
+- The MCP bridge must delegate GUI startup to LaunchServices; directly executing the app binary from an agent sandbox makes AppKit abort during registration.
 - Every task mutation commits the materialized row, HLC-stamped outbox registers, and local revision in one SQLite transaction.
 - Rust owns HTTPS push/pull/bootstrap correctness. `supabase-js` subscribes to `public.sync_changes` only to wake that worker. Realtime delivery is never a cursor or source of truth.
 - Supabase RPC acknowledgements merge registers and clear one outbox row but never advance the feed cursor. Applying an ordered pull page and advancing its cursor is one local transaction.
