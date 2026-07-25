@@ -24,6 +24,68 @@ export interface ExportResult {
   path?: string;
 }
 
+export function readErrorMessage(reason: unknown, fallback: string): string {
+  if (reason instanceof Error && reason.message.trim()) return reason.message;
+  if (typeof reason === "string" && reason.trim()) return reason;
+  if (
+    typeof reason === "object"
+    && reason !== null
+    && "message" in reason
+    && typeof reason.message === "string"
+    && reason.message.trim()
+  ) {
+    return reason.message;
+  }
+  return fallback;
+}
+
+export type ProviderCredentialSource = "saved" | "environment" | null;
+
+export interface ProviderCredentialStatus {
+  configured: boolean;
+  source: ProviderCredentialSource;
+}
+
+export interface LlmSettingsStatus {
+  openai: ProviderCredentialStatus;
+  anthropic: ProviderCredentialStatus;
+  pendingJobs: number;
+  failedJobs: number;
+}
+
+export interface SaveLlmSettingsInput {
+  openaiApiKey?: string | null;
+  anthropicApiKey?: string | null;
+}
+
+export interface MergedTaskDraft {
+  title: string;
+  description: string;
+  bucket: Task["bucket"];
+  priority: Task["priority"];
+  area: Task["area"];
+  dueDate: string | null;
+  estimateMinutes: number | null;
+}
+
+export interface DedupeSuggestion {
+  id: string;
+  createdAt: string;
+  newTask: Task;
+  existingTask: Task;
+  mergedTask: MergedTaskDraft;
+}
+
+export type DedupeResolutionAction = "deleteNew" | "deleteExisting" | "merge";
+
+export interface DedupeResolutionOutcome {
+  status: "resolved" | "stale";
+  revision: number;
+  survivor: Task | null;
+  deletedTaskId: string | null;
+  syncRequired: boolean;
+}
+
 export interface TaskClient {
   listTasks(filter?: TaskFilter): Promise<Task[]>;
   createTask(input: CreateTaskInput): Promise<Task>;
@@ -44,6 +106,17 @@ export interface TaskClient {
   subscribeSyncStatus(listener: (status: SyncStatus) => void): Promise<() => void>;
   registerQuickEntryShortcut(shortcut: string): Promise<void>;
   subscribe(listener: () => void): Promise<() => void>;
+  getLlmSettings(): Promise<LlmSettingsStatus>;
+  saveLlmSettings(input: SaveLlmSettingsInput): Promise<LlmSettingsStatus>;
+  listDedupeSuggestions(): Promise<DedupeSuggestion[]>;
+  dismissDedupeSuggestion(id: string): Promise<void>;
+  resolveDedupeSuggestion(
+    id: string,
+    action: DedupeResolutionAction,
+  ): Promise<DedupeResolutionOutcome>;
+  processPendingDedupe(): Promise<void>;
+  subscribeDedupeSuggestions(listener: () => void): Promise<() => void>;
+  subscribeLlmCredentialsRequired(listener: () => void): Promise<() => void>;
   hideCurrentWindow(): Promise<void>;
 }
 
@@ -290,6 +363,37 @@ function browserClient(): TaskClient {
         window.removeEventListener("storage", storageListener);
       };
     },
+    async getLlmSettings() {
+      return {
+        openai: { configured: false, source: null },
+        anthropic: { configured: false, source: null },
+        pendingJobs: 0,
+        failedJobs: 0,
+      };
+    },
+    async saveLlmSettings() {
+      throw new Error("AI task de-duplication is available in the desktop app.");
+    },
+    async listDedupeSuggestions() {
+      return [];
+    },
+    async dismissDedupeSuggestion() {},
+    async resolveDedupeSuggestion() {
+      return {
+        status: "resolved",
+        revision: 0,
+        survivor: null,
+        deletedTaskId: null,
+        syncRequired: false,
+      };
+    },
+    async processPendingDedupe() {},
+    async subscribeDedupeSuggestions() {
+      return () => undefined;
+    },
+    async subscribeLlmCredentialsRequired() {
+      return () => undefined;
+    },
     async hideCurrentWindow() {
       window.blur();
     },
@@ -370,6 +474,26 @@ function tauriClient(): TaskClient {
     async subscribe(listener) {
       const { listen } = await import("@tauri-apps/api/event");
       return listen("todou://tasks-changed", listener);
+    },
+    getLlmSettings: () => invokeResult<LlmSettingsStatus>("get_llm_settings"),
+    saveLlmSettings: (input) => invokeResult<LlmSettingsStatus>("save_llm_settings", { input }),
+    listDedupeSuggestions: () => invokeResult<DedupeSuggestion[]>("list_dedupe_suggestions"),
+    async dismissDedupeSuggestion(id) {
+      await invokeResult<unknown>("dismiss_dedupe_suggestion", { id });
+    },
+    async resolveDedupeSuggestion(id, action) {
+      return invokeResult<DedupeResolutionOutcome>("resolve_dedupe_suggestion", { id, action });
+    },
+    async processPendingDedupe() {
+      await invokeResult<unknown>("process_pending_dedupe");
+    },
+    async subscribeDedupeSuggestions(listener) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen("todou://dedupe-suggestions-changed", listener);
+    },
+    async subscribeLlmCredentialsRequired(listener) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen("todou://llm-credentials-required", listener);
     },
     async hideCurrentWindow() {
       await invoke<void>("hide_quick_entry");

@@ -1,18 +1,24 @@
 use crate::{
+    dedupe::{
+        emit_suggestions_changed, DedupeCoordinator, LlmSettingsStatus, SaveLlmSettingsInput,
+    },
     domain::{
         BootstrapPayload, Bucket, CreateTaskInput, ExportSnapshot, MergeSummary, OutboxMutation,
         RemotePage, Task, TaskFilter, UpdateTaskPatch,
     },
     error::{AppError, AppResult},
     lifecycle,
-    service::TaskService,
+    service::{
+        DedupeResolutionAction, DedupeResolutionOutcome, DedupeResolutionStatus, DedupeSuggestion,
+        TaskService,
+    },
     sync::SyncWake,
 };
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 #[cfg(debug_assertions)]
 use std::{path::PathBuf, process::Command};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 fn announce_change<T>(app: &AppHandle, wake: &SyncWake, value: crate::domain::Revisioned<T>) -> T {
     wake.wake();
@@ -25,11 +31,17 @@ fn announce_change<T>(app: &AppHandle, wake: &SyncWake, value: crate::domain::Re
 #[tauri::command]
 pub fn create_task(
     app: AppHandle,
+    window: WebviewWindow,
     service: State<'_, TaskService>,
     wake: State<'_, SyncWake>,
+    dedupe: State<'_, DedupeCoordinator>,
     input: CreateTaskInput,
 ) -> AppResult<Task> {
-    Ok(announce_change(&app, &wake, service.create_task(input)?))
+    let task = announce_change(&app, &wake, service.create_task(input)?);
+    if window.label() == "main" {
+        dedupe.schedule(app, service.inner().clone());
+    }
+    Ok(task)
 }
 
 #[tauri::command]
@@ -235,6 +247,76 @@ pub fn set_sync_settings(
     let value = service.set_sync_settings(&url, &publishable_key)?.result;
     wake.wake();
     Ok(value)
+}
+
+#[tauri::command]
+pub fn get_llm_settings(
+    service: State<'_, TaskService>,
+    dedupe: State<'_, DedupeCoordinator>,
+) -> AppResult<LlmSettingsStatus> {
+    dedupe.settings_status(&service)
+}
+
+#[tauri::command]
+pub async fn save_llm_settings(
+    app: AppHandle,
+    service: State<'_, TaskService>,
+    dedupe: State<'_, DedupeCoordinator>,
+    input: SaveLlmSettingsInput,
+) -> AppResult<LlmSettingsStatus> {
+    let status = dedupe.save_settings(&service, input).await?;
+    dedupe.schedule(app, service.inner().clone());
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn process_pending_dedupe(
+    app: AppHandle,
+    service: State<'_, TaskService>,
+    dedupe: State<'_, DedupeCoordinator>,
+) {
+    dedupe.schedule(app, service.inner().clone());
+}
+
+#[tauri::command]
+pub fn list_dedupe_suggestions(
+    service: State<'_, TaskService>,
+) -> AppResult<Vec<DedupeSuggestion>> {
+    service.list_dedupe_suggestions()
+}
+
+#[tauri::command]
+pub fn dismiss_dedupe_suggestion(
+    app: AppHandle,
+    service: State<'_, TaskService>,
+    id: String,
+) -> AppResult<()> {
+    service.dismiss_dedupe_suggestion(&id)?;
+    emit_suggestions_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn resolve_dedupe_suggestion(
+    app: AppHandle,
+    service: State<'_, TaskService>,
+    wake: State<'_, SyncWake>,
+    dedupe: State<'_, DedupeCoordinator>,
+    id: String,
+    action: DedupeResolutionAction,
+) -> AppResult<DedupeResolutionOutcome> {
+    let outcome = service.resolve_dedupe_suggestion(&id, action)?;
+    if outcome.status == DedupeResolutionStatus::Stale {
+        dedupe.schedule(app.clone(), service.inner().clone());
+    }
+    if outcome.sync_required {
+        wake.wake();
+        if let Err(error) = app.emit("todou://tasks-changed", outcome.revision) {
+            tracing::warn!(%error, "could not emit task change event");
+        }
+    }
+    emit_suggestions_changed(&app);
+    Ok(outcome)
 }
 
 #[tauri::command]

@@ -11,7 +11,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyHint } from "./components/KeyHint";
 import { Sidebar } from "./components/Sidebar";
+import { DedupeSuggestionToast } from "./features/dedupe/DedupeSuggestionToast";
 import { CommandPalette, type PaletteMode } from "./features/palette/CommandPalette";
+import { AiSettingsDialog } from "./features/settings/AiSettingsDialog";
 import { SyncSettingsDialog } from "./features/settings/SyncSettingsDialog";
 import { FlatTaskList } from "./features/tasks/FlatTaskList";
 import { InlineComposer } from "./features/tasks/InlineComposer";
@@ -27,7 +29,14 @@ import {
   type SyncSettings,
   type SyncStatus,
 } from "./lib/syncSettings";
-import { isTauriRuntime, taskClient } from "./lib/taskClient";
+import {
+  isTauriRuntime,
+  taskClient,
+  type DedupeResolutionAction,
+  type DedupeSuggestion,
+  type LlmSettingsStatus,
+  type SaveLlmSettingsInput,
+} from "./lib/taskClient";
 import { completedTasks, reorderAnchors, searchTasks, tasksForBucket } from "./lib/taskOrdering";
 import { applyTheme, themeById } from "./lib/themes";
 import type { AppPreferences, Bucket, ShortcutAction, Task, ThemeId, View } from "./lib/types";
@@ -40,6 +49,12 @@ const shortcutWarningKey = "todou.quick-entry-shortcut-warning.v1";
 const inProgressTaskLimit = 3;
 type TaskShortcutAction = Extract<ShortcutAction, "complete" | "moveToday" | "moveInbox" | "togglePriority" | "toggleArea" | "delete">;
 type ShortcutTip = { action: TaskShortcutAction; label: string };
+const emptyLlmSettings: LlmSettingsStatus = {
+  openai: { configured: false, source: null },
+  anthropic: { configured: false, source: null },
+  pendingJobs: 0,
+  failedJobs: 0,
+};
 
 function viewTitle(view: View): { title: string; subtitle?: string; icon: typeof Sparkles } {
   if (view === "today") return { title: "Today", subtitle: formatHeaderDate(), icon: CalendarDays };
@@ -77,6 +92,9 @@ export default function App() {
   const [shortcutTip, setShortcutTip] = useState<ShortcutTip | null>(null);
   const [shortcutWarning, setShortcutWarning] = useState<string | null>(() => localStorage.getItem(shortcutWarningKey));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [llmSettings, setLlmSettings] = useState<LlmSettingsStatus>(emptyLlmSettings);
+  const [dedupeSuggestions, setDedupeSuggestions] = useState<DedupeSuggestion[]>([]);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>(emptySyncSettings);
   const [syncSettingsLoaded, setSyncSettingsLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("not-connected");
@@ -102,8 +120,32 @@ export default function App() {
   }, [controller.tasks, logbookQuery]);
   const searchResults = useMemo(() => searchTasks(controller.tasks, searchQuery), [controller.tasks, searchQuery]);
   const selectedTask = useMemo(() => controller.tasks.find(({ id, deletedAt }) => id === selectedTaskId && !deletedAt) ?? null, [controller.tasks, selectedTaskId]);
+  const currentDedupeSuggestion = dedupeSuggestions[0] ?? null;
   const header = viewTitle(view);
   const HeaderIcon = header.icon;
+
+  const reloadDedupeSuggestions = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    setDedupeSuggestions(await taskClient.listDedupeSuggestions());
+  }, []);
+
+  const reloadLlmSettings = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    const status = await taskClient.getLlmSettings();
+    setLlmSettings(status);
+    if (status.pendingJobs > 0 && !status.openai.configured && !status.anthropic.configured) {
+      setAiSettingsOpen(true);
+    }
+  }, []);
+
+  const processFocusedDedupe = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    await taskClient.processPendingDedupe();
+    await Promise.all([
+      reloadDedupeSuggestions(),
+      reloadLlmSettings(),
+    ]);
+  }, [reloadDedupeSuggestions, reloadLlmSettings]);
 
   useEffect(() => {
     applyTheme(previewTheme);
@@ -137,6 +179,74 @@ export default function App() {
       if (disconnect) void disconnect();
     };
   }, [syncSettings, syncSettingsLoaded]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let listenersReady = false;
+    const cleanups: Array<() => void> = [];
+
+    const handleSuggestionsChanged = () => {
+      void reloadDedupeSuggestions().catch(() => undefined);
+      void reloadLlmSettings().catch(() => undefined);
+    };
+    const handleCredentialsRequired = () => {
+      setAiSettingsOpen(true);
+      void reloadLlmSettings().catch(() => undefined);
+    };
+    let initializing: Promise<void> | null = null;
+    const initialize = () => {
+      if (listenersReady) return Promise.resolve();
+      if (initializing) return initializing;
+      initializing = (async () => {
+        const results = await Promise.allSettled([
+          taskClient.subscribeDedupeSuggestions(handleSuggestionsChanged),
+          taskClient.subscribeLlmCredentialsRequired(handleCredentialsRequired),
+        ]);
+        const subscriptions = results.flatMap((result) => (
+          result.status === "fulfilled" ? [result.value] : []
+        ));
+        if (disposed) {
+          subscriptions.forEach((cleanup) => cleanup());
+          return;
+        }
+        if (results.some((result) => result.status === "rejected")) {
+          subscriptions.forEach((cleanup) => cleanup());
+        } else {
+          cleanups.push(...subscriptions);
+          listenersReady = true;
+        }
+        await Promise.all([
+          reloadDedupeSuggestions(),
+          reloadLlmSettings(),
+        ]);
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        if (!disposed && await getCurrentWindow().isFocused()) {
+          await processFocusedDedupe();
+        }
+      })().catch(() => {
+        // Rust keeps the queue durable; the next focus gets another chance.
+      }).finally(() => {
+        initializing = null;
+      });
+      return initializing;
+    };
+    const handleFocus = () => {
+      if (listenersReady) {
+        void processFocusedDedupe().catch(() => undefined);
+      } else {
+        void initialize();
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    void initialize();
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", handleFocus);
+      cleanups.forEach((cleanup) => cleanup());
+    };
+  }, [processFocusedDedupe, reloadDedupeSuggestions, reloadLlmSettings]);
 
   useEffect(() => {
     if (!syncSettingsLoaded) return;
@@ -269,6 +379,51 @@ export default function App() {
     setSyncSettings(settings);
     showNotice(settings.url ? "Supabase settings saved" : "Supabase settings cleared");
   }, [showNotice]);
+
+  const openAiSettings = useCallback(() => {
+    setAiSettingsOpen(true);
+    void reloadLlmSettings().catch(() => undefined);
+  }, [reloadLlmSettings]);
+
+  const saveLlmSettings = useCallback(async (input: SaveLlmSettingsInput) => {
+    const status = await taskClient.saveLlmSettings(input);
+    setLlmSettings(status);
+    await processFocusedDedupe();
+    return status;
+  }, [processFocusedDedupe]);
+
+  const dismissDedupeSuggestion = useCallback(async (suggestion: DedupeSuggestion) => {
+    await taskClient.dismissDedupeSuggestion(suggestion.id);
+    setDedupeSuggestions((current) => current.filter(({ id }) => id !== suggestion.id));
+    await reloadDedupeSuggestions();
+  }, [reloadDedupeSuggestions]);
+
+  const resolveDedupeSuggestion = useCallback(async (
+    suggestion: DedupeSuggestion,
+    action: DedupeResolutionAction,
+  ) => {
+    const outcome = await taskClient.resolveDedupeSuggestion(suggestion.id, action);
+    setDedupeSuggestions((current) => current.filter(({ id }) => id !== suggestion.id));
+    if (outcome.status === "stale") {
+      showNotice("Tasks changed — checking for duplicates again");
+      await Promise.all([
+        controller.reload(),
+        processFocusedDedupe(),
+      ]);
+      return;
+    }
+    await Promise.all([
+      controller.reload(),
+      reloadDedupeSuggestions(),
+      reloadLlmSettings(),
+    ]);
+  }, [
+    controller.reload,
+    processFocusedDedupe,
+    reloadDedupeSuggestions,
+    reloadLlmSettings,
+    showNotice,
+  ]);
 
   const exportTasks = useCallback(async () => {
     try {
@@ -632,6 +787,7 @@ export default function App() {
         onNewTask={() => openComposer()}
         onExport={() => void exportTasks()}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenAiSettings={openAiSettings}
         {...(import.meta.env.DEV && isTauriRuntime() ? { onBuildInstaller: () => void buildProductionApp() } : {})}
         selectedTask={selectedTask}
         canUndo={Boolean(controller.undo)}
@@ -658,6 +814,23 @@ export default function App() {
         onTestConnection={taskClient.testSyncConnection}
         onLoadDiagnostics={taskClient.getSyncDiagnostics}
       />
+
+      <AiSettingsDialog
+        open={aiSettingsOpen}
+        runtime={isTauriRuntime() ? "tauri" : "browser"}
+        status={llmSettings}
+        onOpenChange={setAiSettingsOpen}
+        onSave={saveLlmSettings}
+      />
+
+      {currentDedupeSuggestion && (
+        <DedupeSuggestionToast
+          key={currentDedupeSuggestion.id}
+          suggestion={currentDedupeSuggestion}
+          onDismiss={() => dismissDedupeSuggestion(currentDedupeSuggestion)}
+          onResolve={(action) => resolveDedupeSuggestion(currentDedupeSuggestion, action)}
+        />
+      )}
 
       {controller.undo && (
         <div className="undo-toast" role="status">

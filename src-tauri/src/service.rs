@@ -7,10 +7,12 @@ use crate::{
     },
     error::{AppError, AppResult, ErrorCode},
     hlc::{self, ClockSource, Hlc, HlcState},
+    llm::{MergedTaskDraft, Provider, ProviderCredentials, MAX_LOGBOOK_CONTEXT_TASKS},
     order_key,
 };
 use parking_lot::Mutex;
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     cmp::Ordering,
@@ -42,6 +44,117 @@ const REGISTER_NAMES: [&str; 9] = [
     "completion",
     "deletion",
 ];
+const DEDUPE_JOB_PREFIX: &str = "dedupe.job.";
+const DEDUPE_SUGGESTION_PREFIX: &str = "dedupe.suggestion.";
+const DEDUPE_FAILED_PREFIX: &str = "dedupe.failed.";
+const OPENAI_KEY_METADATA: &str = "llm.openai_api_key";
+const ANTHROPIC_KEY_METADATA: &str = "llm.anthropic_api_key";
+const MAX_DEDUPE_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DedupeJob {
+    pub task_id: String,
+    pub enqueued_at: String,
+    pub attempts: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DedupeTaskSnapshot {
+    pub task: Task,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DedupeContext {
+    pub job: DedupeJob,
+    pub new_task: DedupeTaskSnapshot,
+    pub candidate_fingerprint: String,
+    pub active_candidates: Vec<DedupeTaskSnapshot>,
+    pub logbook_context: Vec<DedupeTaskSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DedupeCounts {
+    pub pending: u64,
+    pub failed: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmCredentialSource {
+    Saved,
+    Environment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmCredentialStatus {
+    pub configured: bool,
+    pub source: Option<LlmCredentialSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmCredentialsStatus {
+    pub openai: LlmCredentialStatus,
+    pub anthropic: LlmCredentialStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DedupeSuggestion {
+    pub id: String,
+    pub created_at: String,
+    pub new_task: Task,
+    pub existing_task: Task,
+    pub new_task_fingerprint: String,
+    pub existing_task_fingerprint: String,
+    pub merged_task: MergedTaskDraft,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DedupeResolutionAction {
+    DeleteNew,
+    DeleteExisting,
+    Merge,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DedupeResolutionStatus {
+    Resolved,
+    Stale,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DedupeResolutionOutcome {
+    pub status: DedupeResolutionStatus,
+    pub revision: u64,
+    pub survivor: Option<Task>,
+    pub deleted_task_id: Option<String>,
+    pub sync_required: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DedupeFailureDisposition {
+    Retrying,
+    Parked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FailedDedupeJob {
+    task_id: String,
+    enqueued_at: String,
+    attempts: u32,
+    category: String,
+}
 
 #[derive(Clone)]
 pub struct TaskService {
@@ -151,6 +264,16 @@ impl TaskService {
         task.validate()?;
         insert_task(&transaction, &task)?;
         enqueue_registers(&transaction, &task, &REGISTER_NAMES, &now)?;
+        let job = DedupeJob {
+            task_id: task.id.clone(),
+            enqueued_at: now.clone(),
+            attempts: 0,
+        };
+        metadata_set(
+            &transaction,
+            &dedupe_job_key(&task.id),
+            &serde_json::to_string(&job)?,
+        )?;
         let revision = bump_revision(&transaction)?;
         transaction.commit().map_err(AppError::from)?;
         Ok(Revisioned::new(task, revision))
@@ -1006,6 +1129,437 @@ impl TaskService {
         Ok(summary)
     }
 
+    pub fn list_pending_dedupe_jobs(&self) -> AppResult<Vec<DedupeJob>> {
+        let connection = self.inner.connection.lock();
+        let mut jobs = load_metadata_values::<DedupeJob>(&connection, DEDUPE_JOB_PREFIX)?;
+        jobs.sort_by(|left, right| {
+            left.enqueued_at
+                .cmp(&right.enqueued_at)
+                .then_with(|| left.task_id.cmp(&right.task_id))
+        });
+        Ok(jobs)
+    }
+
+    pub fn dedupe_counts(&self) -> AppResult<DedupeCounts> {
+        let connection = self.inner.connection.lock();
+        Ok(DedupeCounts {
+            pending: metadata_prefix_count(&connection, DEDUPE_JOB_PREFIX)?,
+            failed: metadata_prefix_count(&connection, DEDUPE_FAILED_PREFIX)?,
+        })
+    }
+
+    pub fn prepare_dedupe_context(&self, task_id: &str) -> AppResult<Option<DedupeContext>> {
+        validate_uuid(task_id, "taskId")?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let job_key = dedupe_job_key(task_id);
+        let Some(encoded_job) = metadata_get(&transaction, &job_key)? else {
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        };
+        let job = decode_metadata::<DedupeJob>(&job_key, &encoded_job)?;
+        if job.task_id != task_id {
+            return Err(AppError::storage("dedupe job task id is corrupt"));
+        }
+        let Some(new_task) = load_task(&transaction, task_id)? else {
+            delete_metadata(&transaction, &job_key)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        };
+        if !new_task.is_active() {
+            delete_metadata(&transaction, &job_key)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        }
+
+        let active_candidates = load_active_dedupe_candidates(&transaction, task_id, &job)?;
+        let mut logbook_context = Vec::new();
+        for task in load_all_tasks(&transaction)? {
+            if task.id == task_id || task.deleted_at.is_some() {
+                continue;
+            }
+            if task.completed_at.is_some() {
+                logbook_context.push(task_snapshot(task)?);
+            }
+        }
+        logbook_context.sort_by(|left, right| logbook_cmp(&left.task, &right.task));
+        logbook_context.truncate(MAX_LOGBOOK_CONTEXT_TASKS);
+
+        let context = DedupeContext {
+            job,
+            new_task: task_snapshot(new_task)?,
+            candidate_fingerprint: candidate_set_fingerprint(&active_candidates)?,
+            active_candidates,
+            logbook_context,
+        };
+        transaction.commit().map_err(AppError::from)?;
+        Ok(Some(context))
+    }
+
+    pub fn llm_credentials(&self) -> AppResult<ProviderCredentials> {
+        let connection = self.inner.connection.lock();
+        Ok(ProviderCredentials {
+            openai: effective_api_key(&connection, OPENAI_KEY_METADATA, "OPENAI_API_KEY")?,
+            anthropic: effective_api_key(&connection, ANTHROPIC_KEY_METADATA, "ANTHROPIC_API_KEY")?,
+        })
+    }
+
+    pub fn llm_credential_status(&self) -> AppResult<LlmCredentialsStatus> {
+        let connection = self.inner.connection.lock();
+        Ok(LlmCredentialsStatus {
+            openai: credential_status(&connection, OPENAI_KEY_METADATA, "OPENAI_API_KEY")?,
+            anthropic: credential_status(&connection, ANTHROPIC_KEY_METADATA, "ANTHROPIC_API_KEY")?,
+        })
+    }
+
+    pub fn set_llm_api_key(&self, provider: Provider, key: Option<&str>) -> AppResult<()> {
+        let metadata_key = match provider {
+            Provider::OpenAi => OPENAI_KEY_METADATA,
+            Provider::Anthropic => ANTHROPIC_KEY_METADATA,
+        };
+        let key = key
+            .map(str::trim)
+            .map(|value| {
+                if value.is_empty() {
+                    Err(AppError::invalid_input("API key cannot be blank"))
+                } else if value.len() > 16 * 1024 {
+                    Err(AppError::invalid_input("API key is too large"))
+                } else {
+                    Ok(value)
+                }
+            })
+            .transpose()?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        match key {
+            Some(value) => metadata_set(&transaction, metadata_key, value)?,
+            None => delete_metadata(&transaction, metadata_key)?,
+        }
+        transaction.commit().map_err(AppError::from)
+    }
+
+    pub fn commit_dedupe_no_match(
+        &self,
+        task_id: &str,
+        expected_fingerprint: &str,
+        expected_candidate_fingerprint: &str,
+    ) -> AppResult<bool> {
+        validate_uuid(task_id, "taskId")?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let job_key = dedupe_job_key(task_id);
+        let Some(encoded_job) = metadata_get(&transaction, &job_key)? else {
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(false);
+        };
+        let job = decode_metadata::<DedupeJob>(&job_key, &encoded_job)?;
+        if job.task_id != task_id {
+            return Err(AppError::storage("dedupe job task id is corrupt"));
+        }
+        let Some(task) = load_task(&transaction, task_id)? else {
+            delete_metadata(&transaction, &job_key)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(true);
+        };
+        if !task.is_active() {
+            delete_metadata(&transaction, &job_key)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(true);
+        }
+        if task_fingerprint(&task)? != expected_fingerprint {
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(false);
+        }
+        let candidates = load_active_dedupe_candidates(&transaction, task_id, &job)?;
+        if candidate_set_fingerprint(&candidates)? != expected_candidate_fingerprint {
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(false);
+        }
+        delete_metadata(&transaction, &job_key)?;
+        transaction.commit().map_err(AppError::from)?;
+        Ok(true)
+    }
+
+    pub fn commit_dedupe_suggestion(
+        &self,
+        new_task_id: &str,
+        expected_new_fingerprint: &str,
+        expected_candidate_fingerprint: &str,
+        existing_task_id: &str,
+        expected_existing_fingerprint: &str,
+        mut merged_task: MergedTaskDraft,
+    ) -> AppResult<Option<DedupeSuggestion>> {
+        validate_uuid(new_task_id, "newTaskId")?;
+        validate_uuid(existing_task_id, "existingTaskId")?;
+        if new_task_id == existing_task_id {
+            return Err(AppError::invalid_input(
+                "a task cannot be a duplicate of itself",
+            ));
+        }
+        normalize_merged_draft(&mut merged_task, self.inner.clock.local_date())?;
+        let now = hlc::timestamp(self.inner.clock.now_millis())?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let job_key = dedupe_job_key(new_task_id);
+        let Some(encoded_job) = metadata_get(&transaction, &job_key)? else {
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        };
+        let job = decode_metadata::<DedupeJob>(&job_key, &encoded_job)?;
+        if job.task_id != new_task_id {
+            return Err(AppError::storage("dedupe job task id is corrupt"));
+        }
+        let Some(new_task) = load_task(&transaction, new_task_id)? else {
+            delete_metadata(&transaction, &job_key)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        };
+        if !new_task.is_active() {
+            delete_metadata(&transaction, &job_key)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        }
+        let candidates = load_active_dedupe_candidates(&transaction, new_task_id, &job)?;
+        let current_candidate_fingerprint = candidate_set_fingerprint(&candidates)?;
+        let existing_task = candidates
+            .iter()
+            .find(|candidate| candidate.task.id == existing_task_id);
+        if task_fingerprint(&new_task)? != expected_new_fingerprint
+            || current_candidate_fingerprint != expected_candidate_fingerprint
+            || existing_task.map(|candidate| candidate.fingerprint.as_str())
+                != Some(expected_existing_fingerprint)
+        {
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        }
+        let existing_task = existing_task
+            .expect("candidate fingerprint validation requires an existing task")
+            .task
+            .clone();
+
+        let suggestion = DedupeSuggestion {
+            id: Uuid::new_v4().to_string(),
+            created_at: now,
+            new_task,
+            existing_task,
+            new_task_fingerprint: expected_new_fingerprint.to_owned(),
+            existing_task_fingerprint: expected_existing_fingerprint.to_owned(),
+            merged_task,
+        };
+        metadata_set(
+            &transaction,
+            &dedupe_suggestion_key(&suggestion.id),
+            &serde_json::to_string(&suggestion)?,
+        )?;
+        delete_metadata(&transaction, &job_key)?;
+        transaction.commit().map_err(AppError::from)?;
+        Ok(Some(suggestion))
+    }
+
+    pub fn record_dedupe_job_failure(
+        &self,
+        task_id: &str,
+        category: &str,
+    ) -> AppResult<DedupeFailureDisposition> {
+        validate_uuid(task_id, "taskId")?;
+        validate_failure_category(category)?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let job_key = dedupe_job_key(task_id);
+        let encoded =
+            metadata_get(&transaction, &job_key)?.ok_or_else(|| AppError::not_found(task_id))?;
+        let mut job = decode_metadata::<DedupeJob>(&job_key, &encoded)?;
+        if job.task_id != task_id {
+            return Err(AppError::storage("dedupe job task id is corrupt"));
+        }
+        job.attempts = job
+            .attempts
+            .checked_add(1)
+            .ok_or_else(|| AppError::storage("dedupe attempt count overflow"))?;
+        let disposition = if job.attempts >= MAX_DEDUPE_ATTEMPTS {
+            let failed = FailedDedupeJob {
+                task_id: job.task_id.clone(),
+                enqueued_at: job.enqueued_at,
+                attempts: job.attempts,
+                category: category.to_owned(),
+            };
+            metadata_set(
+                &transaction,
+                &dedupe_failed_key(task_id),
+                &serde_json::to_string(&failed)?,
+            )?;
+            delete_metadata(&transaction, &job_key)?;
+            DedupeFailureDisposition::Parked
+        } else {
+            metadata_set(&transaction, &job_key, &serde_json::to_string(&job)?)?;
+            DedupeFailureDisposition::Retrying
+        };
+        transaction.commit().map_err(AppError::from)?;
+        Ok(disposition)
+    }
+
+    pub fn retry_failed_dedupe_jobs(&self) -> AppResult<u64> {
+        let now = hlc::timestamp(self.inner.clock.now_millis())?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let failed = load_metadata_entries::<FailedDedupeJob>(&transaction, DEDUPE_FAILED_PREFIX)?;
+        let mut retried = 0_u64;
+        for (metadata_key, failed_job) in failed {
+            if load_task(&transaction, &failed_job.task_id)?.is_some_and(|task| task.is_active()) {
+                let job = DedupeJob {
+                    task_id: failed_job.task_id.clone(),
+                    enqueued_at: now.clone(),
+                    attempts: 0,
+                };
+                metadata_set(
+                    &transaction,
+                    &dedupe_job_key(&failed_job.task_id),
+                    &serde_json::to_string(&job)?,
+                )?;
+                retried += 1;
+            }
+            delete_metadata(&transaction, &metadata_key)?;
+        }
+        transaction.commit().map_err(AppError::from)?;
+        Ok(retried)
+    }
+
+    pub fn list_dedupe_suggestions(&self) -> AppResult<Vec<DedupeSuggestion>> {
+        let connection = self.inner.connection.lock();
+        let mut suggestions =
+            load_metadata_values::<DedupeSuggestion>(&connection, DEDUPE_SUGGESTION_PREFIX)?;
+        suggestions.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(suggestions)
+    }
+
+    pub fn dismiss_dedupe_suggestion(&self, id: &str) -> AppResult<()> {
+        validate_uuid(id, "id")?;
+        let connection = self.inner.connection.lock();
+        connection
+            .execute(
+                "DELETE FROM metadata WHERE key = ?1",
+                [dedupe_suggestion_key(id)],
+            )
+            .map_err(AppError::from)?;
+        Ok(())
+    }
+
+    pub fn resolve_dedupe_suggestion(
+        &self,
+        id: &str,
+        action: DedupeResolutionAction,
+    ) -> AppResult<DedupeResolutionOutcome> {
+        validate_uuid(id, "id")?;
+        let now_ms = self.inner.clock.now_millis();
+        let now = hlc::timestamp(now_ms)?;
+        let local_date = self.inner.clock.local_date();
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let suggestion_key = dedupe_suggestion_key(id);
+        let encoded = metadata_get(&transaction, &suggestion_key)?.ok_or_else(|| {
+            AppError::new(ErrorCode::NotFound, "Dedupe suggestion not found")
+                .with_details(json!({ "suggestionId": id }))
+        })?;
+        let mut suggestion = decode_metadata::<DedupeSuggestion>(&suggestion_key, &encoded)?;
+        if suggestion.id != id {
+            return Err(AppError::storage("dedupe suggestion id is corrupt"));
+        }
+        normalize_merged_draft(&mut suggestion.merged_task, local_date)?;
+        let new_task = load_task(&transaction, &suggestion.new_task.id)?;
+        let existing_task = load_task(&transaction, &suggestion.existing_task.id)?;
+        let is_fresh = new_task.as_ref().is_some_and(|task| task.is_active())
+            && existing_task.as_ref().is_some_and(|task| task.is_active())
+            && new_task
+                .as_ref()
+                .map(task_fingerprint)
+                .transpose()?
+                .as_deref()
+                == Some(suggestion.new_task_fingerprint.as_str())
+            && existing_task
+                .as_ref()
+                .map(task_fingerprint)
+                .transpose()?
+                .as_deref()
+                == Some(suggestion.existing_task_fingerprint.as_str());
+        if !is_fresh {
+            delete_metadata(&transaction, &suggestion_key)?;
+            if new_task.as_ref().is_some_and(|task| task.is_active()) {
+                let job = DedupeJob {
+                    task_id: suggestion.new_task.id.clone(),
+                    enqueued_at: now,
+                    attempts: 0,
+                };
+                metadata_set(
+                    &transaction,
+                    &dedupe_job_key(&job.task_id),
+                    &serde_json::to_string(&job)?,
+                )?;
+            }
+            let revision = read_revision(&transaction)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(DedupeResolutionOutcome {
+                status: DedupeResolutionStatus::Stale,
+                revision,
+                survivor: None,
+                deleted_task_id: None,
+                sync_required: false,
+            });
+        }
+
+        let mut new_task = new_task.expect("freshness requires a new task");
+        let mut existing_task = existing_task.expect("freshness requires an existing task");
+        let (survivor, deleted_task_id) = match action {
+            DedupeResolutionAction::DeleteNew => {
+                tombstone_for_dedupe(&transaction, &mut new_task, now_ms, &now)?;
+                (existing_task, new_task.id)
+            }
+            DedupeResolutionAction::DeleteExisting => {
+                tombstone_for_dedupe(&transaction, &mut existing_task, now_ms, &now)?;
+                (new_task, existing_task.id)
+            }
+            DedupeResolutionAction::Merge => {
+                apply_merged_draft(
+                    &transaction,
+                    &mut existing_task,
+                    &suggestion.merged_task,
+                    &new_task.id,
+                    now_ms,
+                    &now,
+                )?;
+                tombstone_for_dedupe(&transaction, &mut new_task, now_ms, &now)?;
+                (existing_task, new_task.id)
+            }
+        };
+        delete_metadata(&transaction, &suggestion_key)?;
+        let revision = bump_revision(&transaction)?;
+        transaction.commit().map_err(AppError::from)?;
+        Ok(DedupeResolutionOutcome {
+            status: DedupeResolutionStatus::Resolved,
+            revision,
+            survivor: Some(survivor),
+            deleted_task_id: Some(deleted_task_id),
+            sync_required: true,
+        })
+    }
+
     pub fn sync_diagnostics(&self) -> AppResult<Revisioned<Value>> {
         let connection = self.inner.connection.lock();
         let pending = connection
@@ -1230,6 +1784,183 @@ fn metadata_set(transaction: &Transaction<'_>, key: &str, value: &str) -> AppRes
     Ok(())
 }
 
+fn delete_metadata(transaction: &Transaction<'_>, key: &str) -> AppResult<()> {
+    transaction
+        .execute("DELETE FROM metadata WHERE key = ?1", [key])
+        .map_err(AppError::from)?;
+    Ok(())
+}
+
+fn load_metadata_entries<T>(connection: &Connection, prefix: &str) -> AppResult<Vec<(String, T)>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut statement = connection
+        .prepare("SELECT key, value FROM metadata WHERE key GLOB ?1 ORDER BY key")
+        .map_err(AppError::from)?;
+    let rows = statement
+        .query_map([format!("{prefix}*")], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(AppError::from)?;
+    let mut values = Vec::new();
+    for row in rows {
+        let (key, encoded) = row.map_err(AppError::from)?;
+        values.push((key.clone(), decode_metadata(&key, &encoded)?));
+    }
+    Ok(values)
+}
+
+fn load_metadata_values<T>(connection: &Connection, prefix: &str) -> AppResult<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    Ok(load_metadata_entries(connection, prefix)?
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect())
+}
+
+fn decode_metadata<T>(key: &str, encoded: &str) -> AppResult<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_str(encoded)
+        .map_err(|_| AppError::storage(format!("metadata value '{key}' is corrupt")))
+}
+
+fn metadata_prefix_count(connection: &Connection, prefix: &str) -> AppResult<u64> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) FROM metadata WHERE key GLOB ?1",
+            [format!("{prefix}*")],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(AppError::from)?;
+    u64::try_from(count).map_err(|_| AppError::storage("metadata count is invalid"))
+}
+
+fn dedupe_job_key(task_id: &str) -> String {
+    format!("{DEDUPE_JOB_PREFIX}{task_id}")
+}
+
+fn dedupe_failed_key(task_id: &str) -> String {
+    format!("{DEDUPE_FAILED_PREFIX}{task_id}")
+}
+
+fn dedupe_suggestion_key(id: &str) -> String {
+    format!("{DEDUPE_SUGGESTION_PREFIX}{id}")
+}
+
+fn task_fingerprint(task: &Task) -> AppResult<String> {
+    serde_json::to_string(&task.clocks).map_err(AppError::from)
+}
+
+fn task_snapshot(task: Task) -> AppResult<DedupeTaskSnapshot> {
+    Ok(DedupeTaskSnapshot {
+        fingerprint: task_fingerprint(&task)?,
+        task,
+    })
+}
+
+fn dedupe_job_cmp(left: &DedupeJob, right: &DedupeJob) -> Ordering {
+    left.enqueued_at
+        .cmp(&right.enqueued_at)
+        .then_with(|| left.task_id.cmp(&right.task_id))
+}
+
+fn load_active_dedupe_candidates(
+    connection: &Connection,
+    new_task_id: &str,
+    current_job: &DedupeJob,
+) -> AppResult<Vec<DedupeTaskSnapshot>> {
+    let pending_jobs = load_metadata_values::<DedupeJob>(connection, DEDUPE_JOB_PREFIX)?
+        .into_iter()
+        .map(|job| (job.task_id.clone(), job))
+        .collect::<BTreeMap<_, _>>();
+    let mut candidates = Vec::new();
+    for task in load_all_tasks(connection)? {
+        if task.id == new_task_id || !task.is_active() {
+            continue;
+        }
+        let is_eligible = pending_jobs
+            .get(&task.id)
+            .is_none_or(|candidate_job| dedupe_job_cmp(candidate_job, current_job).is_lt());
+        if is_eligible {
+            candidates.push(task_snapshot(task)?);
+        }
+    }
+    candidates.sort_by(|left, right| active_cmp(&left.task, &right.task));
+    Ok(candidates)
+}
+
+fn candidate_set_fingerprint(candidates: &[DedupeTaskSnapshot]) -> AppResult<String> {
+    serde_json::to_string(
+        &candidates
+            .iter()
+            .map(|candidate| (&candidate.task.id, &candidate.fingerprint))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(AppError::from)
+}
+
+fn usable_key(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
+}
+
+fn environment_key(name: &str) -> Option<String> {
+    usable_key(std::env::var(name).ok())
+}
+
+fn effective_api_key(
+    connection: &Connection,
+    metadata_key: &str,
+    environment_name: &str,
+) -> AppResult<Option<String>> {
+    Ok(usable_key(metadata_get(connection, metadata_key)?)
+        .or_else(|| environment_key(environment_name)))
+}
+
+fn credential_status(
+    connection: &Connection,
+    metadata_key: &str,
+    environment_name: &str,
+) -> AppResult<LlmCredentialStatus> {
+    if usable_key(metadata_get(connection, metadata_key)?).is_some() {
+        return Ok(LlmCredentialStatus {
+            configured: true,
+            source: Some(LlmCredentialSource::Saved),
+        });
+    }
+    if environment_key(environment_name).is_some() {
+        return Ok(LlmCredentialStatus {
+            configured: true,
+            source: Some(LlmCredentialSource::Environment),
+        });
+    }
+    Ok(LlmCredentialStatus {
+        configured: false,
+        source: None,
+    })
+}
+
+fn validate_failure_category(category: &str) -> AppResult<()> {
+    if category.is_empty()
+        || category.len() > 64
+        || !category
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(AppError::invalid_input(
+            "dedupe failure category must be a safe identifier",
+        ));
+    }
+    Ok(())
+}
+
 fn read_revision(connection: &Connection) -> AppResult<u64> {
     metadata_get(connection, "local_revision")?
         .ok_or_else(|| AppError::storage("local revision is missing"))?
@@ -1435,6 +2166,111 @@ fn update_task_row(transaction: &Transaction<'_>, task: &Task) -> AppResult<()> 
     Ok(())
 }
 
+fn normalize_merged_draft(
+    draft: &mut MergedTaskDraft,
+    local_date: chrono::NaiveDate,
+) -> AppResult<()> {
+    draft.title = crate::domain::normalize_title(&draft.title)?;
+    draft.description = crate::domain::normalize_description(&draft.description)?;
+    validate_due_date(draft.due_date.as_deref())?;
+    validate_estimate(draft.estimate_minutes)?;
+    if draft.bucket == Bucket::Inbox
+        && draft
+            .due_date
+            .as_deref()
+            .map(parse_due_date)
+            .transpose()?
+            .is_some_and(|date| date <= local_date)
+    {
+        draft.bucket = Bucket::Today;
+    }
+    Ok(())
+}
+
+fn apply_merged_draft(
+    transaction: &Transaction<'_>,
+    task: &mut Task,
+    draft: &MergedTaskDraft,
+    released_task_id: &str,
+    now_ms: i64,
+    now: &str,
+) -> AppResult<()> {
+    let previous_bucket = task.bucket;
+    let previous_priority = task.priority;
+    let mut changed = BTreeSet::new();
+
+    if task.title != draft.title {
+        task.title = draft.title.clone();
+        changed.insert("title");
+    }
+    if task.description != draft.description {
+        task.description = draft.description.clone();
+        changed.insert("description");
+    }
+    if task.bucket != draft.bucket && draft.bucket == Bucket::InProgress {
+        ensure_in_progress_capacity_after_dedupe(transaction, task.id.as_str(), released_task_id)?;
+    }
+    if task.bucket != draft.bucket || task.due_date != draft.due_date {
+        task.bucket = draft.bucket;
+        task.due_date = draft.due_date.clone();
+        changed.insert("schedule");
+    }
+    if task.priority != draft.priority {
+        task.priority = draft.priority;
+        changed.insert("priority");
+    }
+    if task.area != draft.area {
+        task.area = draft.area;
+        changed.insert("area");
+    }
+    if task.estimate_minutes != draft.estimate_minutes {
+        task.estimate_minutes = draft.estimate_minutes;
+        changed.insert("estimate");
+    }
+    if task.bucket != previous_bucket || task.priority != previous_priority {
+        task.order_key = next_tier_key(
+            transaction,
+            task.bucket,
+            task.priority,
+            Some(task.id.as_str()),
+        )?;
+        changed.insert("order");
+    }
+    if changed.is_empty() {
+        return Ok(());
+    }
+
+    let stamp = next_stamp(transaction, now_ms)?;
+    apply_clock(&mut task.clocks, &changed, &stamp);
+    task.updated_at = now.to_owned();
+    task.validate()?;
+    update_task_row(transaction, task)?;
+    let changed_names = changed.into_iter().collect::<Vec<_>>();
+    enqueue_registers(transaction, task, &changed_names, now)?;
+    Ok(())
+}
+
+fn tombstone_for_dedupe(
+    transaction: &Transaction<'_>,
+    task: &mut Task,
+    now_ms: i64,
+    now: &str,
+) -> AppResult<()> {
+    if !task.is_active() {
+        return Err(AppError::new(
+            ErrorCode::InvalidTransition,
+            "dedupe resolution task is no longer active",
+        ));
+    }
+    task.deleted_at = Some(now.to_owned());
+    task.updated_at = now.to_owned();
+    task.clocks.deletion = next_stamp(transaction, now_ms)?;
+    task.validate()?;
+    update_task_row(transaction, task)?;
+    enqueue_registers(transaction, task, &["deletion"], now)?;
+    Ok(())
+}
+
 fn task_params(task: &Task) -> [rusqlite::types::Value; 22] {
     use rusqlite::types::Value as SqlValue;
     [
@@ -1495,6 +2331,29 @@ fn ensure_in_progress_capacity(connection: &Connection, exclude_id: Option<&str>
              WHERE bucket = 'in_progress' AND completed_at IS NULL AND deleted_at IS NULL
                AND (?1 IS NULL OR id != ?1)",
             [exclude_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(AppError::from)?;
+    if count >= IN_PROGRESS_TASK_LIMIT {
+        return Err(AppError::new(
+            ErrorCode::InvalidTransition,
+            "In Progress can only contain three active tasks",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_in_progress_capacity_after_dedupe(
+    connection: &Connection,
+    survivor_id: &str,
+    released_task_id: &str,
+) -> AppResult<()> {
+    let count = connection
+        .query_row(
+            "SELECT count(*) FROM tasks
+             WHERE bucket = 'in_progress' AND completed_at IS NULL AND deleted_at IS NULL
+               AND id != ?1 AND id != ?2",
+            params![survivor_id, released_task_id],
             |row| row.get::<_, i64>(0),
         )
         .map_err(AppError::from)?;
@@ -1905,5 +2764,734 @@ fn mixed_cmp(left: &Task, right: &Task) -> Ordering {
         (true, true) => logbook_cmp(left, right),
         (false, true) => Ordering::Less,
         (true, false) => Ordering::Greater,
+    }
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::{DedupeResolutionAction, DedupeResolutionStatus, LlmCredentialSource, TaskService};
+    use crate::{
+        domain::{
+            Area, BootstrapPayload, Bucket, CreateTaskInput, Priority, TaskFilter, UpdateTaskPatch,
+            PROTOCOL_VERSION,
+        },
+        error::ErrorCode,
+        hlc::ClockSource,
+        llm::{MergedTaskDraft, Provider},
+    };
+    use chrono::NaiveDate;
+    use serde_json::Value;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    struct FixedClock;
+
+    impl ClockSource for FixedClock {
+        fn now_millis(&self) -> i64 {
+            1_784_521_200_000
+        }
+
+        fn local_date(&self) -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()
+        }
+    }
+
+    fn service() -> TaskService {
+        TaskService::in_memory_with_clock(Arc::new(FixedClock)).unwrap()
+    }
+
+    fn input(title: &str) -> CreateTaskInput {
+        CreateTaskInput {
+            id: None,
+            title: title.into(),
+            bucket: Bucket::Inbox,
+            priority: Priority::Low,
+            area: Area::Personal,
+            due_date: None,
+            estimate_minutes: None,
+        }
+    }
+
+    fn identified_input(title: &str, sequence: u64) -> CreateTaskInput {
+        let mut input = input(title);
+        input.id = Some(format!("00000000-0000-4000-8000-{sequence:012}"));
+        input
+    }
+
+    fn merged(title: &str) -> MergedTaskDraft {
+        MergedTaskDraft {
+            title: title.into(),
+            description: "Combined details from both tasks".into(),
+            bucket: Bucket::Inbox,
+            priority: Priority::High,
+            area: Area::Work,
+            due_date: Some("2026-07-19".into()),
+            estimate_minutes: Some(45),
+        }
+    }
+
+    fn clear_outbox(service: &TaskService) {
+        service
+            .inner
+            .connection
+            .lock()
+            .execute("DELETE FROM outbox", [])
+            .unwrap();
+    }
+
+    fn suggestion(
+        service: &TaskService,
+        new_task_id: &str,
+        existing_task_id: &str,
+    ) -> super::DedupeSuggestion {
+        suggestion_with_draft(
+            service,
+            new_task_id,
+            existing_task_id,
+            merged("Reconciled task"),
+        )
+    }
+
+    fn suggestion_with_draft(
+        service: &TaskService,
+        new_task_id: &str,
+        existing_task_id: &str,
+        draft: MergedTaskDraft,
+    ) -> super::DedupeSuggestion {
+        let context = service
+            .prepare_dedupe_context(new_task_id)
+            .unwrap()
+            .unwrap();
+        let existing = context
+            .active_candidates
+            .iter()
+            .find(|candidate| candidate.task.id == existing_task_id)
+            .unwrap();
+        service
+            .commit_dedupe_suggestion(
+                new_task_id,
+                &context.new_task.fingerprint,
+                &context.candidate_fingerprint,
+                existing_task_id,
+                &existing.fingerprint,
+                draft,
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn local_create_enqueues_but_remote_import_does_not() {
+        let local = service();
+        let created = local.create_task(input("Local task")).unwrap().result;
+        let jobs = local.list_pending_dedupe_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].task_id, created.id);
+        assert_eq!(jobs[0].attempts, 0);
+
+        let remote = service();
+        remote
+            .bootstrap_remote(BootstrapPayload {
+                protocol_version: PROTOCOL_VERSION,
+                epoch: Uuid::new_v4().to_string(),
+                watermark: 1,
+                tasks: vec![created],
+            })
+            .unwrap();
+        assert!(remote.list_pending_dedupe_jobs().unwrap().is_empty());
+    }
+
+    #[test]
+    fn queued_jobs_only_compare_against_stably_older_tasks() {
+        let service = service();
+        let older = service
+            .create_task(identified_input("Older", 1))
+            .unwrap()
+            .result;
+        let newer = service
+            .create_task(identified_input("Newer", 2))
+            .unwrap()
+            .result;
+
+        let jobs = service.list_pending_dedupe_jobs().unwrap();
+        assert_eq!(
+            jobs.iter()
+                .map(|job| job.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![older.id.as_str(), newer.id.as_str()]
+        );
+        assert!(service
+            .prepare_dedupe_context(&older.id)
+            .unwrap()
+            .unwrap()
+            .active_candidates
+            .is_empty());
+        assert_eq!(
+            service
+                .prepare_dedupe_context(&newer.id)
+                .unwrap()
+                .unwrap()
+                .active_candidates[0]
+                .task
+                .id,
+            older.id
+        );
+    }
+
+    #[test]
+    fn context_includes_remote_tasks_with_later_creation_clocks() {
+        let local = service();
+        let new_task = local
+            .create_task(identified_input("Local new task", 2))
+            .unwrap()
+            .result;
+        let remote_source = service();
+        let mut remote = remote_source
+            .create_task(identified_input("Remote existing task", 1))
+            .unwrap()
+            .result;
+        remote.created_at = "2030-01-01T00:00:00.000Z".into();
+        local
+            .bootstrap_remote(BootstrapPayload {
+                protocol_version: PROTOCOL_VERSION,
+                epoch: Uuid::new_v4().to_string(),
+                watermark: 1,
+                tasks: vec![remote.clone()],
+            })
+            .unwrap();
+
+        let context = local.prepare_dedupe_context(&new_task.id).unwrap().unwrap();
+
+        assert!(context
+            .active_candidates
+            .iter()
+            .any(|candidate| candidate.task.id == remote.id));
+    }
+
+    #[test]
+    fn context_separates_active_logbook_and_deleted_tasks() {
+        let service = service();
+        let active = service
+            .create_task(identified_input("Active", 1))
+            .unwrap()
+            .result;
+        let completed = service
+            .create_task(identified_input("Completed", 2))
+            .unwrap()
+            .result;
+        service.complete_task(&completed.id).unwrap();
+        let deleted = service
+            .create_task(identified_input("Deleted", 3))
+            .unwrap()
+            .result;
+        service.delete_task(&deleted.id).unwrap();
+        let new_task = service
+            .create_task(identified_input("New", 4))
+            .unwrap()
+            .result;
+
+        let context = service
+            .prepare_dedupe_context(&new_task.id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(context.new_task.task.id, new_task.id);
+        assert_eq!(
+            context
+                .active_candidates
+                .iter()
+                .map(|snapshot| snapshot.task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![active.id.as_str()]
+        );
+        assert_eq!(
+            context
+                .logbook_context
+                .iter()
+                .map(|snapshot| snapshot.task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![completed.id.as_str()]
+        );
+    }
+
+    #[test]
+    fn no_match_only_consumes_an_unchanged_job() {
+        let service = service();
+        let new_task = service.create_task(input("Original")).unwrap().result;
+        let stale = service
+            .prepare_dedupe_context(&new_task.id)
+            .unwrap()
+            .unwrap();
+        service
+            .update_task(
+                &new_task.id,
+                UpdateTaskPatch {
+                    title: Some("Changed".into()),
+                    ..UpdateTaskPatch::default()
+                },
+            )
+            .unwrap();
+
+        assert!(!service
+            .commit_dedupe_no_match(
+                &new_task.id,
+                &stale.new_task.fingerprint,
+                &stale.candidate_fingerprint,
+            )
+            .unwrap());
+        assert_eq!(service.list_pending_dedupe_jobs().unwrap().len(), 1);
+
+        let current = service
+            .prepare_dedupe_context(&new_task.id)
+            .unwrap()
+            .unwrap();
+        assert!(service
+            .commit_dedupe_no_match(
+                &new_task.id,
+                &current.new_task.fingerprint,
+                &current.candidate_fingerprint,
+            )
+            .unwrap());
+        assert!(service.list_pending_dedupe_jobs().unwrap().is_empty());
+    }
+
+    #[test]
+    fn no_match_keeps_the_job_when_a_candidate_changes() {
+        let service = service();
+        let existing = service
+            .create_task(identified_input("Existing", 1))
+            .unwrap()
+            .result;
+        let new_task = service
+            .create_task(identified_input("New", 2))
+            .unwrap()
+            .result;
+        let context = service
+            .prepare_dedupe_context(&new_task.id)
+            .unwrap()
+            .unwrap();
+        service
+            .update_task(
+                &existing.id,
+                UpdateTaskPatch {
+                    title: Some("Now matches the new task".into()),
+                    ..UpdateTaskPatch::default()
+                },
+            )
+            .unwrap();
+
+        assert!(!service
+            .commit_dedupe_no_match(
+                &new_task.id,
+                &context.new_task.fingerprint,
+                &context.candidate_fingerprint,
+            )
+            .unwrap());
+        assert!(service
+            .list_pending_dedupe_jobs()
+            .unwrap()
+            .iter()
+            .any(|job| job.task_id == new_task.id));
+    }
+
+    #[test]
+    fn deterministic_failures_park_after_three_attempts_and_can_retry() {
+        let service = service();
+        let task = service.create_task(input("Retry me")).unwrap().result;
+
+        assert_eq!(
+            service
+                .record_dedupe_job_failure(&task.id, "provider_response")
+                .unwrap(),
+            super::DedupeFailureDisposition::Retrying
+        );
+        assert_eq!(service.list_pending_dedupe_jobs().unwrap()[0].attempts, 1);
+        assert_eq!(
+            service
+                .record_dedupe_job_failure(&task.id, "provider_response")
+                .unwrap(),
+            super::DedupeFailureDisposition::Retrying
+        );
+        assert_eq!(
+            service
+                .record_dedupe_job_failure(&task.id, "provider_response")
+                .unwrap(),
+            super::DedupeFailureDisposition::Parked
+        );
+        assert_eq!(
+            service.dedupe_counts().unwrap(),
+            super::DedupeCounts {
+                pending: 0,
+                failed: 1
+            }
+        );
+
+        assert_eq!(service.retry_failed_dedupe_jobs().unwrap(), 1);
+        assert_eq!(
+            service.dedupe_counts().unwrap(),
+            super::DedupeCounts {
+                pending: 1,
+                failed: 0
+            }
+        );
+        assert_eq!(service.list_pending_dedupe_jobs().unwrap()[0].attempts, 0);
+    }
+
+    #[test]
+    fn suggestion_commit_rejects_a_changed_candidate() {
+        let service = service();
+        let existing = service
+            .create_task(identified_input("Existing", 1))
+            .unwrap()
+            .result;
+        let new_task = service
+            .create_task(identified_input("New", 2))
+            .unwrap()
+            .result;
+        let context = service
+            .prepare_dedupe_context(&new_task.id)
+            .unwrap()
+            .unwrap();
+        let candidate = &context.active_candidates[0];
+        service
+            .update_task(
+                &existing.id,
+                UpdateTaskPatch {
+                    title: Some("Changed while provider ran".into()),
+                    ..UpdateTaskPatch::default()
+                },
+            )
+            .unwrap();
+
+        assert!(service
+            .commit_dedupe_suggestion(
+                &new_task.id,
+                &context.new_task.fingerprint,
+                &context.candidate_fingerprint,
+                &existing.id,
+                &candidate.fingerprint,
+                merged("Should not persist"),
+            )
+            .unwrap()
+            .is_none());
+        assert!(service.list_dedupe_suggestions().unwrap().is_empty());
+        assert!(service
+            .list_pending_dedupe_jobs()
+            .unwrap()
+            .iter()
+            .any(|job| job.task_id == new_task.id));
+    }
+
+    #[test]
+    fn merge_resolution_reconciles_all_fields_atomically() {
+        let service = service();
+        let existing = service
+            .create_task(identified_input("Existing", 1))
+            .unwrap()
+            .result;
+        let existing_order = existing.order_key.clone();
+        let new_task = service
+            .create_task(identified_input("New", 2))
+            .unwrap()
+            .result;
+        let suggestion = suggestion(&service, &new_task.id, &existing.id);
+        clear_outbox(&service);
+        let revision = service.revision().unwrap();
+
+        let outcome = service
+            .resolve_dedupe_suggestion(&suggestion.id, DedupeResolutionAction::Merge)
+            .unwrap();
+
+        assert_eq!(outcome.status, DedupeResolutionStatus::Resolved);
+        assert_eq!(outcome.revision, revision + 1);
+        assert!(outcome.sync_required);
+        let survivor = outcome.survivor.unwrap();
+        assert_eq!(survivor.id, existing.id);
+        assert_eq!(survivor.title, "Reconciled task");
+        assert_eq!(survivor.description, "Combined details from both tasks");
+        assert_eq!(survivor.bucket, Bucket::Today);
+        assert_eq!(survivor.priority, Priority::High);
+        assert_eq!(survivor.area, Area::Work);
+        assert_eq!(survivor.due_date.as_deref(), Some("2026-07-19"));
+        assert_eq!(survivor.estimate_minutes, Some(45));
+        assert_ne!(survivor.order_key, existing_order);
+        assert!(service.get_task(&new_task.id).is_err());
+        assert!(service.list_dedupe_suggestions().unwrap().is_empty());
+
+        let connection = service.inner.connection.lock();
+        let mut statement = connection
+            .prepare("SELECT task_id, registers_json FROM outbox ORDER BY local_sequence")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        let survivor_registers: Value = serde_json::from_str(&rows[0].1).unwrap();
+        assert_eq!(rows[0].0, existing.id);
+        assert_eq!(
+            survivor_registers
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "area",
+                "description",
+                "estimate",
+                "order",
+                "priority",
+                "schedule",
+                "title"
+            ]
+        );
+        let deletion_registers: Value = serde_json::from_str(&rows[1].1).unwrap();
+        assert_eq!(rows[1].0, new_task.id);
+        assert_eq!(
+            deletion_registers
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["deletion"]
+        );
+    }
+
+    #[test]
+    fn merge_rejects_an_in_progress_result_when_three_other_tasks_are_active() {
+        let service = service();
+        for sequence in 1..=3 {
+            let mut input = identified_input(&format!("Active {sequence}"), sequence);
+            input.bucket = Bucket::InProgress;
+            service.create_task(input).unwrap();
+        }
+        let existing = service
+            .create_task(identified_input("Existing", 4))
+            .unwrap()
+            .result;
+        let new_task = service
+            .create_task(identified_input("New", 5))
+            .unwrap()
+            .result;
+        let mut draft = merged("Reconciled task");
+        draft.bucket = Bucket::InProgress;
+        draft.due_date = None;
+        let suggestion = suggestion_with_draft(&service, &new_task.id, &existing.id, draft);
+        clear_outbox(&service);
+        let revision = service.revision().unwrap();
+
+        let error = service
+            .resolve_dedupe_suggestion(&suggestion.id, DedupeResolutionAction::Merge)
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidTransition);
+        assert_eq!(service.revision().unwrap(), revision);
+        assert_eq!(
+            service.get_task(&existing.id).unwrap().result.title,
+            "Existing"
+        );
+        assert_eq!(service.get_task(&new_task.id).unwrap().result.title, "New");
+        assert_eq!(service.next_outbox(100).unwrap().result.len(), 0);
+        assert_eq!(service.list_dedupe_suggestions().unwrap(), vec![suggestion]);
+    }
+
+    #[test]
+    fn merge_can_reuse_the_in_progress_slot_held_by_the_deleted_duplicate() {
+        let service = service();
+        for sequence in 1..=2 {
+            let mut input = identified_input(&format!("Active {sequence}"), sequence);
+            input.bucket = Bucket::InProgress;
+            service.create_task(input).unwrap();
+        }
+        let existing = service
+            .create_task(identified_input("Existing", 3))
+            .unwrap()
+            .result;
+        let mut new_input = identified_input("New", 4);
+        new_input.bucket = Bucket::InProgress;
+        let new_task = service.create_task(new_input).unwrap().result;
+        let mut draft = merged("Reconciled task");
+        draft.bucket = Bucket::InProgress;
+        draft.due_date = None;
+        let suggestion = suggestion_with_draft(&service, &new_task.id, &existing.id, draft);
+
+        let outcome = service
+            .resolve_dedupe_suggestion(&suggestion.id, DedupeResolutionAction::Merge)
+            .unwrap();
+
+        assert_eq!(outcome.status, DedupeResolutionStatus::Resolved);
+        assert_eq!(outcome.survivor.unwrap().bucket, Bucket::InProgress);
+        assert_eq!(
+            service
+                .list_tasks(TaskFilter {
+                    bucket: Some(Bucket::InProgress),
+                    completed: Some(false),
+                    ..TaskFilter::default()
+                })
+                .unwrap()
+                .result
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn merge_keeps_an_overdue_in_progress_schedule_in_progress() {
+        let service = service();
+        let existing = service
+            .create_task(identified_input("Existing", 1))
+            .unwrap()
+            .result;
+        let new_task = service
+            .create_task(identified_input("New", 2))
+            .unwrap()
+            .result;
+        let mut draft = merged("Reconciled task");
+        draft.bucket = Bucket::InProgress;
+        draft.due_date = Some("2026-07-19".into());
+        let suggestion = suggestion_with_draft(&service, &new_task.id, &existing.id, draft);
+
+        assert_eq!(suggestion.merged_task.bucket, Bucket::InProgress);
+        assert_eq!(
+            suggestion.merged_task.due_date.as_deref(),
+            Some("2026-07-19")
+        );
+        let survivor = service
+            .resolve_dedupe_suggestion(&suggestion.id, DedupeResolutionAction::Merge)
+            .unwrap()
+            .survivor
+            .unwrap();
+        assert_eq!(survivor.bucket, Bucket::InProgress);
+        assert_eq!(survivor.due_date.as_deref(), Some("2026-07-19"));
+    }
+
+    #[test]
+    fn stale_resolution_applies_no_partial_mutation_and_requeues() {
+        let service = service();
+        let existing = service
+            .create_task(identified_input("Existing", 1))
+            .unwrap()
+            .result;
+        let new_task = service
+            .create_task(identified_input("New", 2))
+            .unwrap()
+            .result;
+        let suggestion = suggestion(&service, &new_task.id, &existing.id);
+        service
+            .update_task(
+                &existing.id,
+                UpdateTaskPatch {
+                    description: Some("Changed while the suggestion was open".into()),
+                    ..UpdateTaskPatch::default()
+                },
+            )
+            .unwrap();
+        clear_outbox(&service);
+        let revision = service.revision().unwrap();
+
+        let outcome = service
+            .resolve_dedupe_suggestion(&suggestion.id, DedupeResolutionAction::Merge)
+            .unwrap();
+
+        assert_eq!(outcome.status, DedupeResolutionStatus::Stale);
+        assert_eq!(outcome.revision, revision);
+        assert!(!outcome.sync_required);
+        assert_eq!(
+            service.get_task(&existing.id).unwrap().result.title,
+            "Existing"
+        );
+        assert_eq!(
+            service.get_task(&existing.id).unwrap().result.description,
+            "Changed while the suggestion was open"
+        );
+        assert_eq!(service.get_task(&new_task.id).unwrap().result.title, "New");
+        assert_eq!(service.next_outbox(100).unwrap().result.len(), 0);
+        assert!(service.list_dedupe_suggestions().unwrap().is_empty());
+        assert!(service
+            .list_pending_dedupe_jobs()
+            .unwrap()
+            .iter()
+            .any(|job| job.task_id == new_task.id));
+    }
+
+    #[test]
+    fn either_duplicate_can_be_deleted() {
+        for (action, deleted_new) in [
+            (DedupeResolutionAction::DeleteNew, true),
+            (DedupeResolutionAction::DeleteExisting, false),
+        ] {
+            let service = service();
+            let existing = service
+                .create_task(identified_input("Existing", 1))
+                .unwrap()
+                .result;
+            let new_task = service
+                .create_task(identified_input("New", 2))
+                .unwrap()
+                .result;
+            let suggestion = suggestion(&service, &new_task.id, &existing.id);
+            clear_outbox(&service);
+
+            let outcome = service
+                .resolve_dedupe_suggestion(&suggestion.id, action)
+                .unwrap();
+
+            assert_eq!(outcome.status, DedupeResolutionStatus::Resolved);
+            let deleted_id = if deleted_new {
+                &new_task.id
+            } else {
+                &existing.id
+            };
+            let survivor_id = if deleted_new {
+                &existing.id
+            } else {
+                &new_task.id
+            };
+            assert_eq!(
+                outcome.deleted_task_id.as_deref(),
+                Some(deleted_id.as_str())
+            );
+            assert_eq!(outcome.survivor.unwrap().id, *survivor_id);
+            assert!(service.get_task(deleted_id).is_err());
+            assert_eq!(
+                service.get_task(survivor_id).unwrap().result.id,
+                *survivor_id
+            );
+            let outbox = service.next_outbox(100).unwrap().result;
+            assert_eq!(outbox.len(), 1);
+            assert_eq!(outbox[0].task_id, *deleted_id);
+            assert_eq!(
+                outbox[0]
+                    .registers
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                vec!["deletion"]
+            );
+        }
+    }
+
+    #[test]
+    fn credentials_are_shared_privately_and_status_is_redacted() {
+        let service = service();
+        service
+            .set_llm_api_key(Provider::OpenAi, Some("sk-test-secret"))
+            .unwrap();
+
+        assert_eq!(
+            service.llm_credentials().unwrap().openai.as_deref(),
+            Some("sk-test-secret")
+        );
+        let status = service.llm_credential_status().unwrap();
+        assert!(status.openai.configured);
+        assert_eq!(status.openai.source, Some(LlmCredentialSource::Saved));
+        assert!(!serde_json::to_string(&status)
+            .unwrap()
+            .contains("sk-test-secret"));
     }
 }

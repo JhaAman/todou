@@ -15,6 +15,8 @@
 - Sort by bucket, then high before low, then bytewise `orderKey`, then UUID. Do not add a list-wide order-key rebalance.
 - `{bucket, due_date}` is the single remote `schedule` register. PostgreSQL JSON uses `due_date`; public Rust/TypeScript task objects serialize as `dueDate`.
 - Preferences and Supabase credentials stay device-local. Hosted access uses only a publishable/anonymous key, never a service-role key.
+- OpenAI/Anthropic keys are write-only renderer inputs stored unencrypted in private SQLite metadata. They never sync or export; the shared app identifier makes the same values available to installed and dev builds on this Mac.
+- Every local task create enqueues a device-local LLM dedupe job in the same transaction. Main-window entry wakes it immediately; Quick Entry and MCP jobs drain on the next main-window focus. Remote sync imports never enqueue.
 - Tauri commands may be bare values or `Revisioned<T>` during internal refactors; the frontend compatibility unwrapping currently accepts both. The Unix socket always returns `{id, ok, result, revision}`.
 
 ## Commands
