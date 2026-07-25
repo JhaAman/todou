@@ -75,6 +75,22 @@ bunx supabase db push
 
 Todou intentionally uses a publishable/anonymous key without login for this private single-user deployment. Never put a service-role key in the app.
 
+### Automatic hosted migrations
+
+The `Deploy Supabase migrations` workflow reconciles pending migrations after relevant `supabase/config.toml`, `supabase/migrations/**`, or deployment-workflow changes land on `main`. A config-only change triggers migration reconciliation but does not push the local config to the hosted project. The workflow previews the migration list before running `supabase db push`; it never deploys pull requests or resets the hosted database.
+
+Before merging the workflow for the first time:
+
+1. Create a GitHub environment named `production` and limit its deployment branches to `main`. Do this before merge: otherwise GitHub creates an unprotected environment automatically and the workflow fails its missing-setting check.
+2. Add an environment variable named `SUPABASE_PROJECT_REF` containing the hosted project ref from its dashboard URL.
+3. Add these environment secrets:
+   - `SUPABASE_ACCESS_TOKEN`: a Supabase personal access token for an account that can manage the target project's database. Prefer a dedicated account with a project-scoped Developer role when the Supabase plan supports it.
+   - `SUPABASE_DB_PASSWORD`: the target project's database password.
+
+Supabase personal access tokens inherit their account's privileges, so do not reuse an owner token if a narrower project-scoped account is available. Keep both credentials only in the GitHub environment, rotate them if exposed, and do not substitute the app's publishable key or service-role key.
+
+The workflow file is itself a deployment trigger. When that first run succeeds, it applies any migrations already pending on the hosted project, including the task-description and In Progress migrations required by clients using the current sync protocol. Do not release a client that requires those migrations until the production run has succeeded.
+
 ## MCP
 
 Install Todou once across the coding agents detected on your Mac:
