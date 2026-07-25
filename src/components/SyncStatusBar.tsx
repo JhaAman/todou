@@ -116,7 +116,7 @@ export function SyncStatusBar({
       </Popover.Trigger>
 
       <Popover.Portal>
-        <Popover.Positioner className="sync-status-positioner" side="right" align="end" sideOffset={8}>
+        <Popover.Positioner className="sync-status-positioner" positionMethod="fixed" side="right" align="end" sideOffset={8}>
           <Popover.Popup className="sync-status-popover">
             <div className={`sync-status-summary is-${status}`}>
               <span className="sync-status-dot" aria-hidden="true" />
