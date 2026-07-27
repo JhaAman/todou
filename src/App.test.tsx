@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { taskClient } from "./lib/taskClient";
-import type { Task } from "./lib/types";
+import type { Bucket, Task } from "./lib/types";
 
 const taskStoreKey = "todou.browser.tasks.v1";
 const taskSeedKey = "todou.browser.seeded.v1";
@@ -36,6 +36,11 @@ function taskRow(title: string): HTMLElement {
   return row;
 }
 
+function taskSection(bucket: Bucket): HTMLElement {
+  const name = bucket === "in_progress" ? "In Progress" : bucket === "today" ? "Today" : "Inbox";
+  return screen.getByRole("region", { name });
+}
+
 function dataTransfer(): DataTransfer {
   const values = new Map<string, string>();
   return {
@@ -57,51 +62,57 @@ function storedTask(id: string): Task | undefined {
   return tasks.find((candidate) => candidate.id === id);
 }
 
+const crossLaneMoves: Array<{
+  name: string;
+  sourceBucket: Bucket;
+  destinationBucket: Bucket;
+  dueDate: string | null;
+  expectedDueDate: string | null;
+}> = [
+  { name: "Inbox to Today", sourceBucket: "inbox", destinationBucket: "today", dueDate: "2026-07-30", expectedDueDate: "2026-07-30" },
+  { name: "Inbox to In Progress", sourceBucket: "inbox", destinationBucket: "in_progress", dueDate: null, expectedDueDate: null },
+  { name: "Today to Inbox", sourceBucket: "today", destinationBucket: "inbox", dueDate: "2026-07-21", expectedDueDate: null },
+  { name: "Today to In Progress", sourceBucket: "today", destinationBucket: "in_progress", dueDate: "2026-07-21", expectedDueDate: "2026-07-21" },
+  { name: "In Progress to Today", sourceBucket: "in_progress", destinationBucket: "today", dueDate: null, expectedDueDate: null },
+  { name: "In Progress to Inbox", sourceBucket: "in_progress", destinationBucket: "inbox", dueDate: null, expectedDueDate: null },
+];
+
 describe("task drag and drop", () => {
   beforeEach(() => localStorage.clear());
 
-  it("moves a Today task into an empty Inbox and clears its due date", async () => {
+  it.each(crossLaneMoves)("moves a task from $name", async ({ name, sourceBucket, destinationBucket, dueDate, expectedDueDate }) => {
+    const id = `move-${name.toLocaleLowerCase().replaceAll(" ", "-")}`;
+    const title = `Move ${name}`;
     await renderApp([
-      task({ id: "today-task", title: "Move to Inbox", bucket: "today", dueDate: "2026-07-21" }),
+      task({ id, title, bucket: sourceBucket, dueDate }),
     ]);
 
-    const inbox = screen.getByRole("region", { name: "Inbox" });
-    drag(taskRow("Move to Inbox"), inbox);
+    const destination = taskSection(destinationBucket);
+    drag(taskRow(title), destination);
 
-    await waitFor(() => expect(within(inbox).getByText("Move to Inbox")).toBeInTheDocument());
-    expect(storedTask("today-task")).toMatchObject({ bucket: "inbox", dueDate: null });
+    await waitFor(() => expect(within(destination).getByText(title)).toBeInTheDocument());
+    expect(storedTask(id)).toMatchObject({ bucket: destinationBucket, dueDate: expectedDueDate });
   });
 
-  it("moves an Inbox task into an empty Today section", async () => {
+  it.each(crossLaneMoves)("moves a task from $name when it is dropped on a task in the destination lane", async ({ name, sourceBucket, destinationBucket, dueDate, expectedDueDate }) => {
+    const sourceId = `row-move-${name.toLocaleLowerCase().replaceAll(" ", "-")}`;
+    const sourceTitle = `Row move ${name}`;
+    const destinationTitle = `Row target ${name}`;
     await renderApp([
-      task({ id: "inbox-task", title: "Move to Today", bucket: "inbox", dueDate: "2026-07-30" }),
+      task({ id: `row-target-${sourceId}`, title: destinationTitle, bucket: destinationBucket }),
+      task({ id: sourceId, title: sourceTitle, bucket: sourceBucket, dueDate }),
     ]);
-
-    const today = screen.getByRole("region", { name: "Today" });
-    drag(taskRow("Move to Today"), today);
-
-    await waitFor(() => expect(within(today).getByText("Move to Today")).toBeInTheDocument());
-    expect(storedTask("inbox-task")).toMatchObject({ bucket: "today", dueDate: "2026-07-30" });
-  });
-
-  it("moves an Inbox task to Today when it is dropped on a Today task", async () => {
-    await renderApp([
-      task({ id: "today-task", title: "Already Today", bucket: "today" }),
-      task({ id: "inbox-task", title: "Move to Today", bucket: "inbox", dueDate: "2026-07-30" }),
-    ]);
-    const moveTask = vi.spyOn(taskClient, "moveTask");
-    const destination = taskRow("Already Today");
+    const destination = taskRow(destinationTitle);
     vi.spyOn(destination, "getBoundingClientRect").mockReturnValue({
       top: 0,
       height: 100,
     } as DOMRect);
 
-    drag(taskRow("Move to Today"), destination, 75);
+    drag(taskRow(sourceTitle), destination, 75);
 
-    const today = screen.getByRole("region", { name: "Today" });
-    await waitFor(() => expect(within(today).getByText("Move to Today")).toBeInTheDocument());
-    expect(storedTask("inbox-task")).toMatchObject({ bucket: "today", dueDate: "2026-07-30" });
-    expect(moveTask).toHaveBeenCalledOnce();
+    const destinationSection = taskSection(destinationBucket);
+    await waitFor(() => expect(within(destinationSection).getByText(sourceTitle)).toBeInTheDocument());
+    expect(storedTask(sourceId)).toMatchObject({ bucket: destinationBucket, dueDate: expectedDueDate });
   });
 
   it("uses a non-positional affordance when a task is dragged across buckets", async () => {
@@ -151,7 +162,7 @@ describe("task drag and drop", () => {
     }));
   });
 
-  it("clears the sidebar drop affordance when a drag is cancelled", async () => {
+  it("leaves a task unchanged when a drag is cancelled", async () => {
     await renderApp([
       task({ id: "cancel-drag", title: "Cancel drag", bucket: "inbox" }),
     ]);
@@ -165,6 +176,21 @@ describe("task drag and drop", () => {
     fireEvent.dragEnd(source, { dataTransfer: transfer });
 
     expect(destination).not.toHaveClass("is-task-drop-target");
+    expect(storedTask("cancel-drag")).toMatchObject({ bucket: "inbox", dueDate: null });
+  });
+
+  it("leaves a task unchanged when it is dropped outside a target", async () => {
+    await renderApp([
+      task({ id: "outside-drop", title: "Outside drop", bucket: "today", dueDate: "2026-07-21" }),
+    ]);
+    const source = taskRow("Outside drop");
+    const transfer = dataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    fireEvent.drop(document.body, { dataTransfer: transfer });
+    fireEvent.dragEnd(source, { dataTransfer: transfer });
+
+    expect(storedTask("outside-drop")).toMatchObject({ bucket: "today", dueDate: "2026-07-21" });
   });
 
   it("keeps row-to-row ordering within a bucket", async () => {

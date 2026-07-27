@@ -8,6 +8,15 @@ use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 pub const DEFAULT_QUICK_ENTRY_SHORTCUT: &str = "Control+Space";
+const DRAG_LAB_IDENTIFIER: &str = "com.magicproduct.todou.draglab";
+
+fn is_drag_lab_identifier(identifier: &str) -> bool {
+    identifier == DRAG_LAB_IDENTIFIER
+}
+
+fn isolated_dev_mode(app: &AppHandle) -> bool {
+    is_drag_lab_identifier(&app.config().identifier)
+}
 
 pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Show Todou", true, None::<&str>)?;
@@ -32,18 +41,22 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     }
     tray.build(app)?;
 
-    if let Err(error) = register_quick_entry_shortcut(app.handle(), DEFAULT_QUICK_ENTRY_SHORTCUT) {
-        tracing::warn!(%error, "default quick-entry shortcut is unavailable");
-    }
-    let autostart = app.autolaunch();
-    match autostart.is_enabled() {
-        Ok(false) => {
-            if let Err(error) = autostart.enable() {
-                tracing::warn!(%error, "could not enable launch at login");
-            }
+    if !isolated_dev_mode(app.handle()) {
+        if let Err(error) =
+            register_quick_entry_shortcut(app.handle(), DEFAULT_QUICK_ENTRY_SHORTCUT)
+        {
+            tracing::warn!(%error, "default quick-entry shortcut is unavailable");
         }
-        Err(error) => tracing::warn!(%error, "could not inspect launch-at-login state"),
-        Ok(true) => {}
+        let autostart = app.autolaunch();
+        match autostart.is_enabled() {
+            Ok(false) => {
+                if let Err(error) = autostart.enable() {
+                    tracing::warn!(%error, "could not enable launch at login");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "could not inspect launch-at-login state"),
+            Ok(true) => {}
+        }
     }
 
     if std::env::args().any(|argument| argument == "--background") {
@@ -86,6 +99,9 @@ pub fn register_quick_entry_shortcut(
     app: &AppHandle,
     accelerator: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if isolated_dev_mode(app) {
+        return Ok(());
+    }
     if accelerator.trim().is_empty() {
         return Err("shortcut cannot be empty".into());
     }
@@ -95,4 +111,15 @@ pub fn register_quick_entry_shortcut(
         return Err(error.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_drag_lab_identifier;
+
+    #[test]
+    fn only_the_drag_lab_identifier_uses_isolated_lifecycle_behavior() {
+        assert!(is_drag_lab_identifier("com.magicproduct.todou.draglab"));
+        assert!(!is_drag_lab_identifier("com.magicproduct.todou"));
+    }
 }
