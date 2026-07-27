@@ -19,7 +19,6 @@
 - Every local task create enqueues a device-local LLM dedupe job in the same transaction. Main-window entry wakes it immediately; Quick Entry and MCP jobs drain on the next main-window focus. Remote sync imports never enqueue.
 - Tauri commands may be bare values or `Revisioned<T>` during internal refactors; the frontend compatibility unwrapping currently accepts both. The Unix socket always returns `{id, ok, result, revision}`.
 - On macOS, keep the main window's `dragDropEnabled` false so WKWebView receives Todou's HTML5 task-drag events.
-- `tauri.drag-lab.conf.json` deliberately uses a separate identifier so native drag testing cannot touch production data or lifecycle settings.
 
 ## Commands
 

@@ -13,10 +13,8 @@
   ],
   "scripts": {
     "dev": "tauri dev",
-    "dev:drag-lab": "tauri dev --config src-tauri/tauri.drag-lab.conf.json",
     "dev:web": "vite",
     "build": "tauri build --bundles dmg",
-    "build:drag-lab": "tauri build --debug --bundles app --no-sign --config src-tauri/tauri.drag-lab.conf.json",
     "build:bundle-assets": "bun scripts/prepare-bundle.ts",
     "build:web": "tsc --noEmit && vite build",
     "pretypecheck": "bun install --frozen-lockfile",
