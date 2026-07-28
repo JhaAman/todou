@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod service;
 mod socket;
 pub mod sync;
+mod work_mode;
 
 use crate::{dedupe::DedupeCoordinator, service::TaskService, sync::SyncWake};
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -28,7 +29,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(
             |app, arguments, _cwd| {
                 if !arguments.iter().any(|argument| argument == "--background") {
-                    let _ = lifecycle::show_main(app);
+                    let _ = lifecycle::show_primary_window(app);
                 }
             },
         ))
@@ -65,8 +66,11 @@ pub fn run() {
                     tracing::error!(%error, "local task socket stopped");
                 }
             });
-            sync::spawn_worker(app.handle().clone(), service, wake);
+            sync::spawn_worker(app.handle().clone(), service.clone(), wake);
             lifecycle::setup(app)?;
+            if let Err(error) = work_mode::restore_active_work_mode(app.handle(), &service) {
+                tracing::warn!(%error, "could not restore work mode");
+            }
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -119,13 +123,20 @@ pub fn run() {
             commands::hide_quick_entry,
             commands::register_quick_entry_shortcut,
             commands::dev_build_and_install_app,
+            work_mode::start_work_mode,
+            work_mode::stop_work_mode,
+            work_mode::load_work_mode_session,
+            work_mode::checkpoint_work_mode_session,
+            work_mode::get_system_activity_sample,
+            work_mode::snap_work_mode_window,
+            work_mode::deactivate_work_mode,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Todou");
 
     app.run(|app, event| {
         if let RunEvent::Reopen { .. } = event {
-            let _ = lifecycle::show_main(app);
+            let _ = lifecycle::show_primary_window(app);
             app.state::<DedupeCoordinator>()
                 .schedule(app.clone(), app.state::<TaskService>().inner().clone());
         }

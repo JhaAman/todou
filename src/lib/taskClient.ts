@@ -1,4 +1,5 @@
 import { demoTasks } from "./demoData";
+import type { WorkSessionSnapshot } from "../features/work-mode/workSession";
 import { loadPreferences } from "./preferences";
 import { compareTasks } from "./taskOrdering";
 import {
@@ -22,6 +23,11 @@ import {
 export interface ExportResult {
   json?: string;
   path?: string;
+}
+
+export interface SystemActivitySample {
+  idleMs: number | null;
+  awakeTimeMs: number | null;
 }
 
 export function readErrorMessage(reason: unknown, fallback: string): string {
@@ -118,6 +124,16 @@ export interface TaskClient {
   subscribeDedupeSuggestions(listener: () => void): Promise<() => void>;
   subscribeLlmCredentialsRequired(listener: () => void): Promise<() => void>;
   hideCurrentWindow(): Promise<void>;
+  startWorkMode(): Promise<WorkSessionSnapshot>;
+  loadWorkModeSession(): Promise<WorkSessionSnapshot | null>;
+  checkpointWorkModeSession(session: WorkSessionSnapshot): Promise<WorkSessionSnapshot>;
+  subscribeWorkModeSession(
+    listener: (session: WorkSessionSnapshot | null) => void,
+  ): Promise<() => void>;
+  getSystemActivitySample(): Promise<SystemActivitySample>;
+  snapWorkModeWindow(): Promise<void>;
+  deactivateWorkMode(): Promise<void>;
+  stopWorkMode(): Promise<void>;
 }
 
 const browserStoreKey = "todou.browser.tasks.v1";
@@ -397,6 +413,24 @@ function browserClient(): TaskClient {
     async hideCurrentWindow() {
       window.blur();
     },
+    async startWorkMode() {
+      throw new Error("Work mode is available in the Todou desktop app.");
+    },
+    async loadWorkModeSession() {
+      return null;
+    },
+    async checkpointWorkModeSession(session) {
+      return session;
+    },
+    async subscribeWorkModeSession() {
+      return () => undefined;
+    },
+    async getSystemActivitySample() {
+      return { idleMs: null, awakeTimeMs: null };
+    },
+    async snapWorkModeWindow() {},
+    async deactivateWorkMode() {},
+    async stopWorkMode() {},
   };
 }
 
@@ -498,6 +532,23 @@ function tauriClient(): TaskClient {
     async hideCurrentWindow() {
       await invoke<void>("hide_quick_entry");
     },
+    startWorkMode: () => invokeResult<WorkSessionSnapshot>("start_work_mode"),
+    loadWorkModeSession: () => invokeResult<WorkSessionSnapshot | null>("load_work_mode_session"),
+    checkpointWorkModeSession: (session) => invokeResult<WorkSessionSnapshot>("checkpoint_work_mode_session", { session }),
+    async subscribeWorkModeSession(listener) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<WorkSessionSnapshot | null>("todou://work-mode-session-changed", (event) => listener(event.payload));
+    },
+    getSystemActivitySample: () => invoke<SystemActivitySample>("get_system_activity_sample"),
+    async snapWorkModeWindow() {
+      await invoke<void>("snap_work_mode_window");
+    },
+    async deactivateWorkMode() {
+      await invoke<void>("deactivate_work_mode");
+    },
+    async stopWorkMode() {
+      await invoke<void>("stop_work_mode");
+    },
   };
 }
 
@@ -507,13 +558,19 @@ export function isTauriRuntime(): boolean {
 
 export const taskClient: TaskClient = isTauriRuntime() ? tauriClient() : browserClient();
 
-export async function resolveWindowKind(): Promise<"main" | "quick-entry"> {
+export type WindowKind = "main" | "quick-entry" | "work-mode";
+
+export async function resolveWindowKind(): Promise<WindowKind> {
   const params = new URLSearchParams(window.location.search);
   if (params.get("window") === "quick-entry" || params.has("quick-entry")) return "quick-entry";
+  if (params.get("window") === "work-mode") return "work-mode";
   if (!isTauriRuntime()) return "main";
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    return getCurrentWindow().label.includes("quick") ? "quick-entry" : "main";
+    const label = getCurrentWindow().label;
+    if (label.includes("quick")) return "quick-entry";
+    if (label.includes("work")) return "work-mode";
+    return "main";
   } catch {
     return "main";
   }

@@ -4,6 +4,7 @@ import {
   Command,
   Inbox,
   PanelRightOpen,
+  Play,
   Plus,
   Search,
   Sparkles,
@@ -31,6 +32,7 @@ import {
 } from "./lib/syncSettings";
 import {
   isTauriRuntime,
+  readErrorMessage,
   taskClient,
   type DedupeResolutionAction,
   type DedupeSuggestion,
@@ -99,6 +101,7 @@ export default function App() {
   const [syncSettingsLoaded, setSyncSettingsLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("not-connected");
   const [buildingInstaller, setBuildingInstaller] = useState(false);
+  const [startingWorkMode, setStartingWorkMode] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchReturnViewRef = useRef<View>("home");
   const noticeTimerRef = useRef<number | null>(null);
@@ -461,6 +464,18 @@ export default function App() {
     }
   }, [buildingInstaller, showNotice]);
 
+  const startWorkMode = useCallback(async () => {
+    if (!inProgressTasks.length || startingWorkMode) return;
+    setStartingWorkMode(true);
+    try {
+      await taskClient.startWorkMode();
+    } catch (reason) {
+      showNotice(readErrorMessage(reason, "Could not start work mode"));
+    } finally {
+      setStartingWorkMode(false);
+    }
+  }, [inProgressTasks.length, showNotice, startingWorkMode]);
+
   const completeTask = useCallback((id: string) => {
     void controller.completeTask(id);
     showShortcutTip("complete");
@@ -753,6 +768,22 @@ export default function App() {
             />
           )}
         </div>
+        <footer className="work-mode-launch">
+          <button
+            type="button"
+            disabled={controller.loading || startingWorkMode || !inProgressTasks.length}
+            onClick={() => void startWorkMode()}
+          >
+            <Play size={16} fill="currentColor" />
+            <span>
+              {startingWorkMode
+                ? "Starting work mode…"
+                : inProgressTasks.length
+                  ? "Start work mode"
+                  : "Add an In Progress task to start"}
+            </span>
+          </button>
+        </footer>
       </main>
 
       {selectedTask ? (

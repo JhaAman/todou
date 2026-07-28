@@ -1,6 +1,10 @@
-use crate::error::{AppError, AppResult};
+use crate::{
+    error::{AppError, AppResult},
+    service::TaskService,
+    work_mode,
+};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, MenuItemKind},
     tray::TrayIconBuilder,
     App, AppHandle, Emitter, Manager,
 };
@@ -10,6 +14,8 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 pub const DEFAULT_QUICK_ENTRY_SHORTCUT: &str = "Control+Space";
 
 pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    install_application_menu(app)?;
+
     let show = MenuItem::with_id(app, "show", "Show Todou", true, None::<&str>)?;
     let quick = MenuItem::with_id(app, "quick", "Quick Entry", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Todou", true, None::<&str>)?;
@@ -19,7 +25,7 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => {
-                let _ = show_main(app);
+                let _ = show_primary_window(app);
             }
             "quick" => {
                 let _ = show_quick_entry(app);
@@ -54,6 +60,51 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn install_application_menu(app: &App) -> Result<(), Box<dyn std::error::Error>> {
+    let menu = Menu::default(app.handle())?;
+    let application_submenu = menu
+        .items()?
+        .into_iter()
+        .next()
+        .and_then(|item| match item {
+            MenuItemKind::Submenu(submenu) => Some(submenu),
+            _ => None,
+        })
+        .ok_or("default macOS application menu is unavailable")?;
+    let predefined_quit = application_submenu
+        .items()?
+        .into_iter()
+        .next_back()
+        .filter(|item| matches!(item, MenuItemKind::Predefined(_)))
+        .ok_or("default macOS Quit item is unavailable")?;
+    application_submenu.remove(&predefined_quit)?;
+    application_submenu.append(&MenuItem::with_id(
+        app,
+        "application-quit",
+        "Quit Todou",
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?)?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() != "application-quit" {
+            return;
+        }
+        if work_mode::should_intercept_quit(app, app.state::<TaskService>().inner()) {
+            let _ = work_mode::deactivate_after_interaction(app);
+        } else {
+            app.exit(0);
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn install_application_menu(_app: &App) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
 pub fn show_main(app: &AppHandle) -> AppResult<()> {
     let window = app
         .get_webview_window("main")
@@ -61,6 +112,17 @@ pub fn show_main(app: &AppHandle) -> AppResult<()> {
     window.show().map_err(AppError::storage)?;
     window.unminimize().map_err(AppError::storage)?;
     window.set_focus().map_err(AppError::storage)
+}
+
+pub fn show_primary_window(app: &AppHandle) -> AppResult<()> {
+    match work_mode::show_active_work_mode(app, app.state::<TaskService>().inner()) {
+        Ok(true) => Ok(()),
+        Ok(false) => show_main(app),
+        Err(error) => {
+            tracing::warn!(%error, "could not reveal active work mode");
+            show_main(app)
+        }
+    }
 }
 
 pub fn show_quick_entry(app: &AppHandle) -> AppResult<()> {

@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { QuickEntry } from "./features/quick-entry/QuickEntry";
+import { WorkMode } from "./features/work-mode/WorkMode";
 import { loadPreferences } from "./lib/preferences";
 import { resolveWindowKind } from "./lib/taskClient";
 import { applyTheme } from "./lib/themes";
@@ -15,7 +16,7 @@ async function start() {
   if (!root) throw new Error("Todou root element is missing");
   createRoot(root).render(
     <StrictMode>
-      {windowKind === "quick-entry" ? <QuickEntry /> : <App />}
+      {windowKind === "quick-entry" ? <QuickEntry /> : windowKind === "work-mode" ? <WorkMode /> : <App />}
     </StrictMode>,
   );
 }

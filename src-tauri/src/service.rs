@@ -856,6 +856,42 @@ impl TaskService {
         Ok(Revisioned::new(value, revision))
     }
 
+    pub(crate) fn get_local_metadata_value(&self, key: &str) -> AppResult<Option<Value>> {
+        let connection = self.inner.connection.lock();
+        metadata_get(&connection, key)?
+            .map(|encoded| serde_json::from_str(&encoded).map_err(AppError::from))
+            .transpose()
+    }
+
+    pub(crate) fn set_local_metadata_value(
+        &self,
+        key: &str,
+        value: Option<Value>,
+    ) -> AppResult<()> {
+        let encoded = value
+            .map(|value| serde_json::to_string(&value))
+            .transpose()?;
+        if encoded
+            .as_ref()
+            .is_some_and(|value| value.len() > 256 * 1024)
+        {
+            return Err(AppError::invalid_input("metadata value is too large"));
+        }
+
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        if let Some(encoded) = encoded {
+            metadata_set(&transaction, key, &encoded)?;
+        } else {
+            transaction
+                .execute("DELETE FROM metadata WHERE key = ?1", [key])
+                .map_err(AppError::from)?;
+        }
+        transaction.commit().map_err(AppError::from)
+    }
+
     pub fn next_outbox(&self, limit: u32) -> AppResult<Revisioned<Vec<OutboxMutation>>> {
         if !(1..=500).contains(&limit) {
             return Err(AppError::invalid_input(
