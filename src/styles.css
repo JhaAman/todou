@@ -5,7 +5,7 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   color: var(--text);
-  background: var(--bg);
+  background: transparent;
   color-scheme: dark;
   --bg: #0b0d12;
   --sidebar: #0e1016;
