@@ -40,6 +40,27 @@
         "skipTaskbar": true,
         "resizable": false,
         "shadow": true
+      },
+      {
+        "label": "work-mode",
+        "title": "Todou Work Mode",
+        "url": "index.html?window=work-mode",
+        "width": 640,
+        "height": 96,
+        "minWidth": 420,
+        "maxWidth": 960,
+        "minHeight": 96,
+        "maxHeight": 96,
+        "center": false,
+        "visible": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": false,
+        "focusable": false,
+        "acceptFirstMouse": true,
+        "resizable": true,
+        "shadow": true
       }
     ],
     "security": {

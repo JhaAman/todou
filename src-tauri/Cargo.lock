@@ -4199,6 +4199,8 @@ name = "todou"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "objc2",
+ "objc2-app-kit",
  "parking_lot",
  "reqwest",
  "rusqlite",

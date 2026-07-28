@@ -19,6 +19,9 @@
 - Every local task create enqueues a device-local LLM dedupe job in the same transaction. Main-window entry wakes it immediately; Quick Entry and MCP jobs drain on the next main-window focus. Remote sync imports never enqueue.
 - Tauri commands may be bare values or `Revisioned<T>` during internal refactors; the frontend compatibility unwrapping currently accepts both. The Unix socket always returns `{id, ok, result, revision}`.
 - On macOS, keep the main window's `dragDropEnabled` false so WKWebView receives Todou's HTML5 task-drag events.
+- Work Mode uses the hidden `work-mode` webview plus device-local `work_mode_state_v2` metadata. Rust owns window/focus/idle integration and persists window geometry in logical macOS points; the renderer owns countdown reconciliation and checkpoints.
+- Work Mode always targets the first task in canonical In Progress order. Start a new native session when that task changes; never checkpoint a different task ID over the active session.
+- Work Mode countdowns use the macOS awake-time clock, not wall time, so sleep is never charged; global idle comes from CoreGraphics and does not require Accessibility permission.
 
 ## Commands
 

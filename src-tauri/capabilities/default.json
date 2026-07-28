@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
   "description": "Permissions used by the Todou desktop windows",
-  "windows": ["main", "quick-entry"],
+  "windows": ["main", "quick-entry", "work-mode"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

@@ -13,6 +13,7 @@ use crate::{
         TaskService,
     },
     sync::SyncWake,
+    work_mode,
 };
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
@@ -98,11 +99,18 @@ pub fn reorder_task(
 #[tauri::command]
 pub fn complete_task(
     app: AppHandle,
+    window: WebviewWindow,
     service: State<'_, TaskService>,
     wake: State<'_, SyncWake>,
     id: String,
 ) -> AppResult<Task> {
-    Ok(announce_change(&app, &wake, service.complete_task(&id)?))
+    let task = announce_change(&app, &wake, service.complete_task(&id)?);
+    if window.label() == "work-mode" {
+        if let Err(error) = work_mode::deactivate_after_interaction(&app) {
+            tracing::warn!(%error, "could not return focus after completing work-mode task");
+        }
+    }
+    Ok(task)
 }
 
 #[tauri::command]

@@ -388,6 +388,26 @@ describe("new task keyboard shortcuts", () => {
   });
 });
 
+describe("work mode launch", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("disables work mode until an In Progress task exists", async () => {
+    await renderApp([
+      task({ id: "today-task", title: "Not ready yet", bucket: "today" }),
+    ]);
+
+    expect(screen.getByRole("button", { name: "Add an In Progress task to start" })).toBeDisabled();
+  });
+
+  it("enables work mode when an In Progress task exists", async () => {
+    await renderApp([
+      task({ id: "focus-task", title: "Focus on this", bucket: "in_progress" }),
+    ]);
+
+    expect(screen.getByRole("button", { name: "Start work mode" })).toBeEnabled();
+  });
+});
+
 describe("search navigation", () => {
   beforeEach(() => localStorage.clear());
 
