@@ -70,14 +70,11 @@ trap cleanup_staging EXIT
 /usr/bin/ditto "$source_app" "$staging_app"
 [[ -d "$staging_app" ]] || fail "The production app could not be staged."
 
-backup_app=""
 if [[ -e "$destination_app" ]]; then
-  backup_app="$applications_dir/Todou-backup-$(date +%Y%m%d%H%M%S).app"
-  mv "$destination_app" "$backup_app"
+  /bin/rm -R "$destination_app"
 fi
 
 if ! mv "$staging_app" "$destination_app"; then
-  [[ -z "$backup_app" || ! -e "$backup_app" ]] || mv "$backup_app" "$destination_app"
   fail "The production app could not replace the installed copy."
 fi
 
