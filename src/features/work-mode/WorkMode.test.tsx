@@ -70,8 +70,6 @@ function fakeClient(tasks: Task[]): WorkModeClient & {
       idleMs: 0,
       awakeTimeMs: 0,
     })),
-    snapWorkModeWindow: vi.fn(async () => undefined),
-    deactivateWorkMode: vi.fn(async () => undefined),
     stopWorkMode: vi.fn(async () => undefined),
     emitSession: (session) => sessionListener?.(session),
     emitTasks: () => taskListener?.(),
@@ -187,17 +185,6 @@ describe("work mode", () => {
 
     expect(await screen.findByText(actualNext.title)).toBeInTheDocument();
     expect(screen.queryByText(staleNext.title)).not.toBeInTheDocument();
-  });
-
-  it("deactivates Todou after pointer interaction", async () => {
-    const client = fakeClient([task("first", "Write the launch brief")]);
-    render(<WorkMode client={client} />);
-
-    fireEvent.pointerDown(await screen.findByText("Write the launch brief"));
-
-    await waitFor(() => {
-      expect(client.deactivateWorkMode).toHaveBeenCalled();
-    });
   });
 
   it("can start a fresh session after finishing every task", async () => {
