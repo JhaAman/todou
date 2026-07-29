@@ -128,8 +128,6 @@ pub fn run() {
             work_mode::load_work_mode_session,
             work_mode::checkpoint_work_mode_session,
             work_mode::get_system_activity_sample,
-            work_mode::snap_work_mode_window,
-            work_mode::deactivate_work_mode,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Todou");

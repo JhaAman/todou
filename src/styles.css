@@ -65,7 +65,7 @@ body[data-window="quick-entry"] {
 
 body[data-window="work-mode"] {
   min-width: 0;
-  background: var(--surface);
+  background: transparent;
 }
 
 button,
@@ -1380,10 +1380,11 @@ kbd {
   height: 100%;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 14px;
-  padding: 10px 12px 10px 16px;
+  gap: 10px;
+  padding: 7px 9px 7px 12px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border-strong) 82%, var(--accent) 18%);
+  border-radius: 8px;
   background:
     radial-gradient(circle at 10% -80%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 48%),
     linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 98%, var(--bg)), var(--surface));
@@ -1395,13 +1396,13 @@ kbd {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 
 .work-mode-task > span {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 8px;
+  font-size: 7px;
   font-weight: 680;
   letter-spacing: .09em;
   line-height: 1;
@@ -1415,7 +1416,7 @@ kbd {
 .work-mode-task > strong {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 630;
   letter-spacing: -.012em;
   line-height: 1.25;
@@ -1424,10 +1425,10 @@ kbd {
 }
 
 .work-mode-window time {
-  min-width: 72px;
+  min-width: 56px;
   color: var(--text);
   font-variant-numeric: tabular-nums;
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 610;
   letter-spacing: -.04em;
   text-align: right;
@@ -1439,16 +1440,16 @@ kbd {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 
 .work-mode-controls button {
   display: grid;
-  width: 31px;
-  height: 31px;
+  width: 26px;
+  height: 26px;
   place-items: center;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 6px;
   color: var(--text-secondary);
   background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease, transform 80ms ease;
@@ -1490,9 +1491,22 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 10px;
+}
+
+.work-mode-window.is-loading.has-error {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 114px;
+  justify-content: stretch;
+}
+
+.work-mode-window.is-loading.has-error > span {
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .work-mode-window.is-celebrating {
@@ -1508,7 +1522,7 @@ kbd {
 
 .work-mode-window.is-celebrating strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 660;
 }
 
@@ -1518,8 +1532,8 @@ kbd {
 }
 
 .work-mode-window.is-loading button {
-  height: 27px;
-  padding: 0 9px;
+  height: 24px;
+  padding: 0 7px;
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-secondary);

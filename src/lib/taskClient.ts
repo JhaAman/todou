@@ -131,8 +131,6 @@ export interface TaskClient {
     listener: (session: WorkSessionSnapshot | null) => void,
   ): Promise<() => void>;
   getSystemActivitySample(): Promise<SystemActivitySample>;
-  snapWorkModeWindow(): Promise<void>;
-  deactivateWorkMode(): Promise<void>;
   stopWorkMode(): Promise<void>;
 }
 
@@ -428,8 +426,6 @@ function browserClient(): TaskClient {
     async getSystemActivitySample() {
       return { idleMs: null, awakeTimeMs: null };
     },
-    async snapWorkModeWindow() {},
-    async deactivateWorkMode() {},
     async stopWorkMode() {},
   };
 }
@@ -540,12 +536,6 @@ function tauriClient(): TaskClient {
       return listen<WorkSessionSnapshot | null>("todou://work-mode-session-changed", (event) => listener(event.payload));
     },
     getSystemActivitySample: () => invoke<SystemActivitySample>("get_system_activity_sample"),
-    async snapWorkModeWindow() {
-      await invoke<void>("snap_work_mode_window");
-    },
-    async deactivateWorkMode() {
-      await invoke<void>("deactivate_work_mode");
-    },
     async stopWorkMode() {
       await invoke<void>("stop_work_mode");
     },

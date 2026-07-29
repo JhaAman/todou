@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Pause, Play, Sparkles, Square } from "lucide-react";
 import {
-  isTauriRuntime,
   readErrorMessage,
   taskClient,
   type TaskClient,
@@ -20,7 +19,6 @@ import {
 
 const tickIntervalMs = 500;
 const checkpointIntervalMs = 5_000;
-const snapDebounceMs = 180;
 const congratulationsDurationMs = 1_500;
 
 export type WorkModeClient = Pick<
@@ -33,8 +31,6 @@ export type WorkModeClient = Pick<
   | "checkpointWorkModeSession"
   | "subscribeWorkModeSession"
   | "getSystemActivitySample"
-  | "snapWorkModeWindow"
-  | "deactivateWorkMode"
   | "stopWorkMode"
 >;
 
@@ -387,56 +383,11 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
     };
   }, [commitSession, persistSession, readSystemActivity]);
 
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    let disposed = false;
-    let snapping = false;
-    let snapTimer: number | null = null;
-    const cleanups: Array<() => void> = [];
-
-    const scheduleSnap = () => {
-      if (disposed || snapping) return;
-      if (snapTimer !== null) window.clearTimeout(snapTimer);
-      snapTimer = window.setTimeout(() => {
-        snapping = true;
-        void client.snapWorkModeWindow()
-          .catch(() => undefined)
-          .finally(() => {
-            window.setTimeout(() => {
-              snapping = false;
-            }, 50);
-          });
-      }, snapDebounceMs);
-    };
-
-    void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
-      const windowHandle = getCurrentWindow();
-      const unlistenMoved = await windowHandle.onMoved(scheduleSnap);
-      const unlistenResized = await windowHandle.onResized(scheduleSnap);
-      if (disposed) {
-        unlistenMoved();
-        unlistenResized();
-      } else {
-        cleanups.push(unlistenMoved, unlistenResized);
-      }
-    }).catch(() => undefined);
-
-    return () => {
-      disposed = true;
-      if (snapTimer !== null) window.clearTimeout(snapTimer);
-      cleanups.forEach((cleanup) => cleanup());
-    };
-  }, [client]);
-
   useEffect(() => () => {
     if (congratulationsTimerRef.current !== null) {
       window.clearTimeout(congratulationsTimerRef.current);
     }
   }, []);
-
-  const deactivateOnInteraction = () => {
-    void client.deactivateWorkMode().catch(() => undefined);
-  };
 
   const togglePause = async () => {
     const current = sessionRef.current;
@@ -519,14 +470,11 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
 
   if (celebrating) {
     return (
-      <main
-        className="work-mode-window is-celebrating"
-        onPointerDownCapture={deactivateOnInteraction}
-      >
+      <main className="work-mode-window is-celebrating">
         <Sparkles size={20} aria-hidden="true" />
-        <div data-tauri-drag-region>
-          <strong data-tauri-drag-region>All done</strong>
-          <span data-tauri-drag-region>Nice work.</span>
+        <div>
+          <strong>All done</strong>
+          <span>Nice work.</span>
         </div>
       </main>
     );
@@ -534,14 +482,8 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
 
   if (!session || !currentTask) {
     return (
-      <main
-        className="work-mode-window is-loading"
-        data-tauri-drag-region
-        onPointerDownCapture={deactivateOnInteraction}
-      >
-        <span data-tauri-drag-region>
-          {error ?? "Starting work mode…"}
-        </span>
+      <main className={`work-mode-window is-loading${error ? " has-error" : ""}`}>
+        <span>{error ?? "Starting work mode…"}</span>
         {error && (
           <button type="button" tabIndex={-1} onClick={() => void stop()}>
             Return to task list
@@ -570,13 +512,12 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
         idlePaused ? "is-idle" : "",
         session.status === "manual-paused" ? "is-paused" : "",
       ].filter(Boolean).join(" ")}
-      onPointerDownCapture={deactivateOnInteraction}
     >
-      <section className="work-mode-task" data-tauri-drag-region>
-        <span className={error ? "is-error" : ""} data-tauri-drag-region>
+      <section className="work-mode-task">
+        <span className={error ? "is-error" : ""}>
           {stateLabel}
         </span>
-        <strong title={currentTask.title} data-tauri-drag-region>
+        <strong title={currentTask.title}>
           {currentTask.title}
         </strong>
       </section>
@@ -584,7 +525,6 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
       <time
         className={overtime ? "is-overtime" : ""}
         dateTime={durationIso(session.remainingMs)}
-        data-tauri-drag-region
       >
         {formatRemainingTime(session.remainingMs)}
       </time>
