@@ -28,7 +28,10 @@ export function parseQuickTask(input: string, now = new Date()): ParsedQuickTask
     { pattern: /(?:^|\s)\/work(?=\s|$)/i, apply: () => { parsed.area = "work"; } },
     { pattern: /(?:^|\s)\/personal(?=\s|$)/i, apply: () => { parsed.area = "personal"; } },
     { pattern: /(?:^|\s)\/in_progress(?=\s|$)/i, apply: () => { parsed.bucket = "in_progress"; } },
-    { pattern: /(?:^|\s)\/today(?=\s|$)/i, apply: () => { parsed.bucket = "today"; } },
+    { pattern: /(?:^|\s)\/today(?=\s|$)/i, apply: () => {
+      parsed.bucket = "today";
+      parsed.dueDate = localDate(now);
+    } },
     { pattern: /(?:^|\s)\/inbox(?=\s|$)/i, apply: () => { parsed.bucket = "inbox"; } },
     {
       pattern: /(?:^|\s)(\d{1,3})\s*(m|min|mins|minutes)(?=\s|$)/i,

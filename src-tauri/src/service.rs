@@ -213,23 +213,19 @@ impl TaskService {
 
     pub fn create_task(&self, input: CreateTaskInput) -> AppResult<Revisioned<Task>> {
         let title = crate::domain::normalize_title(&input.title)?;
-        validate_due_date(input.due_date.as_deref())?;
+        let due_date = input.due_date.as_deref().map(parse_due_date).transpose()?;
         validate_estimate(input.estimate_minutes)?;
         let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
         validate_uuid(&id, "id")?;
 
         let local_date = self.inner.clock.local_date();
-        let mut bucket = input.bucket;
-        if bucket == Bucket::Inbox
-            && input
-                .due_date
-                .as_deref()
-                .map(parse_due_date)
-                .transpose()?
-                .is_some_and(|date| date <= local_date)
-        {
-            bucket = Bucket::Today;
-        }
+        let bucket = if input.bucket == Bucket::InProgress {
+            Bucket::InProgress
+        } else if due_date.is_some_and(|date| date <= local_date) {
+            Bucket::Today
+        } else {
+            Bucket::Inbox
+        };
 
         let now_ms = self.inner.clock.now_millis();
         let now = hlc::timestamp(now_ms)?;

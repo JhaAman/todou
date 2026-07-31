@@ -514,6 +514,11 @@ fn due_and_move_transitions_preserve_schedule_invariant() {
     let due = service.create_task(due).unwrap().result;
     assert_eq!(due.bucket, Bucket::Today);
 
+    let mut overdue = input("Overdue already");
+    overdue.due_date = Some("2026-07-19".into());
+    let overdue = service.create_task(overdue).unwrap().result;
+    assert_eq!(overdue.bucket, Bucket::Today);
+
     let moved = service.move_task(&due.id, Bucket::Inbox).unwrap().result;
     assert_eq!(moved.bucket, Bucket::Inbox);
     assert_eq!(moved.due_date, None);
@@ -530,6 +535,33 @@ fn due_and_move_transitions_preserve_schedule_invariant() {
         .result;
     assert_eq!(dated.bucket, Bucket::Today);
     assert_eq!(dated.due_date.as_deref(), Some("2026-07-19"));
+}
+
+#[test]
+fn new_task_destination_comes_from_its_saved_schedule() {
+    let service = service();
+
+    let mut unscheduled = input("Unscheduled from Today");
+    unscheduled.bucket = Bucket::Today;
+    let unscheduled = service.create_task(unscheduled).unwrap().result;
+    assert_eq!(unscheduled.bucket, Bucket::Inbox);
+    assert_eq!(unscheduled.due_date, None);
+
+    for due_date in ["2026-07-27", "2026-08-14"] {
+        let mut future = input("Future from Today");
+        future.bucket = Bucket::Today;
+        future.due_date = Some(due_date.into());
+        let future = service.create_task(future).unwrap().result;
+        assert_eq!(future.bucket, Bucket::Inbox);
+        assert_eq!(future.due_date.as_deref(), Some(due_date));
+    }
+
+    let mut in_progress = input("Keep working");
+    in_progress.bucket = Bucket::InProgress;
+    in_progress.due_date = Some("2026-08-14".into());
+    let in_progress = service.create_task(in_progress).unwrap().result;
+    assert_eq!(in_progress.bucket, Bucket::InProgress);
+    assert_eq!(in_progress.due_date.as_deref(), Some("2026-08-14"));
 }
 
 #[test]

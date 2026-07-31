@@ -1,4 +1,5 @@
 import * as chrono from "chrono-node";
+import { localDateString } from "./newTaskSchedule";
 import type { Area, Bucket, CreateTaskInput, Priority } from "./types";
 
 export type ParseTokenKind = "date" | "estimate" | "priority" | "area" | "bucket";
@@ -22,13 +23,6 @@ const estimatePattern = /\b(?:\d+(?:\.\d+)?\s*(?:h|hr|hrs|hour|hours)(?:\s+\d+\s
 const priorityPattern = /(?:^|\s)!(high|low)\b/gi;
 const areaPattern = /(?:^|\s)\/(work|personal)\b/gi;
 const bucketPattern = /(?:^|\s)\/(today|inbox)\b/gi;
-
-function localDateString(value: Date): string {
-  const year = value.getFullYear();
-  const month = `${value.getMonth() + 1}`.padStart(2, "0");
-  const day = `${value.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 function dateLabel(text: string, date: Date, referenceDate: Date): string {
   const normalized = text.trim().toLocaleLowerCase();
@@ -137,6 +131,10 @@ export function parseNaturalLanguage(input: string, referenceDate = new Date()):
   if (bucketTokens[0]) {
     fields.bucket = bucketTokens[0].value as Bucket;
     tokens.push(bucketTokens[0]);
+  }
+
+  if (fields.bucket === "today" && !fields.dueDate) {
+    fields.dueDate = localDateString(referenceDate);
   }
 
   if (fields.dueDate && fields.dueDate <= localDateString(referenceDate)) {

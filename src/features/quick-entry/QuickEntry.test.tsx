@@ -30,4 +30,20 @@ describe("quick entry", () => {
       estimateMinutes: 25,
     });
   });
+
+  it("saves an explicit Today choice with today's due date", async () => {
+    render(<QuickEntry />);
+    fireEvent.change(screen.getByLabelText("New task"), {
+      target: { value: "Call Jordan" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Today list" }));
+    fireEvent.click(screen.getByRole("button", { name: /Add to Today/i }));
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    const tasks = JSON.parse(localStorage.getItem("todou.browser.tasks.v1") ?? "[]") as Task[];
+    const saved = tasks.find(({ title }) => title === "Call Jordan");
+    const now = new Date();
+    const today = `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, "0")}-${`${now.getDate()}`.padStart(2, "0")}`;
+    expect(saved).toMatchObject({ bucket: "today", dueDate: today });
+  });
 });
