@@ -39,6 +39,8 @@ interface CommandPaletteProps {
   onExport: () => void;
   onOpenSettings: () => void;
   onOpenAiSettings: () => void;
+  onRunDedupeScan: () => void;
+  dedupeScanRunning: boolean;
   onBuildInstaller?: () => void;
   selectedTask: Task | null;
   canUndo: boolean;
@@ -105,6 +107,7 @@ export function CommandPalette(props: CommandPaletteProps) {
     { id: "theme", label: "Change theme", detail: themeById(props.committedTheme).name, icon: <Palette />, run: () => enterMode("themes") },
     { id: "shortcuts", label: "Keyboard shortcuts", detail: "View or change every command", icon: <Keyboard />, run: () => enterMode("shortcuts") },
     { id: "export", label: "Export tasks as JSON", detail: "One human-readable file", icon: <Download />, run: () => closeAnd(props.onExport) },
+    { id: "dedupe-scan", label: "Check all tasks for duplicates", detail: props.dedupeScanRunning ? "A scan is already running" : "Analyze active tasks now", icon: <Sparkles />, run: () => closeAnd(props.onRunDedupeScan) },
     { id: "ai-settings", label: "AI de-duplication settings", detail: "Configure OpenAI or Anthropic", icon: <BrainCircuit />, run: () => closeAnd(props.onOpenAiSettings) },
     { id: "settings", label: "Connection settings", detail: "Configure Supabase on this Mac", icon: <Settings2 />, run: () => closeAnd(props.onOpenSettings) },
     ...(import.meta.env.DEV && props.onBuildInstaller ? [{

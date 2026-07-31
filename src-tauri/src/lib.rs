@@ -109,6 +109,7 @@ pub fn run() {
             commands::get_llm_settings,
             commands::save_llm_settings,
             commands::process_pending_dedupe,
+            commands::run_dedupe_scan,
             commands::list_dedupe_suggestions,
             commands::dismiss_dedupe_suggestion,
             commands::resolve_dedupe_suggestion,

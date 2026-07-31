@@ -18,6 +18,8 @@ function renderPalette(
     onExport: vi.fn(),
     onOpenSettings: vi.fn(),
     onOpenAiSettings: vi.fn(),
+    onRunDedupeScan: vi.fn(),
+    dedupeScanRunning: false,
     selectedTask: null,
     canUndo: false,
     onCompleteSelected: vi.fn(),
@@ -89,6 +91,16 @@ describe("command palette", () => {
     fireEvent.click(screen.getByRole("option", { name: /AI de-duplication settings/i }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(onOpenAiSettings).toHaveBeenCalledOnce();
+  });
+
+  it("runs an on-demand duplicate scan through a real command", () => {
+    const onOpenChange = vi.fn();
+    const onRunDedupeScan = vi.fn();
+    renderPalette("commands", { onOpenChange, onRunDedupeScan });
+
+    fireEvent.click(screen.getByRole("option", { name: /Check all tasks for duplicates/i }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onRunDedupeScan).toHaveBeenCalledOnce();
   });
 
   it("offers the development installer command only when its native callback exists", () => {

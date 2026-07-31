@@ -1176,6 +1176,34 @@ impl TaskService {
         Ok(jobs)
     }
 
+    pub fn enqueue_active_dedupe_jobs(&self) -> AppResult<u64> {
+        let now = hlc::timestamp(self.inner.clock.now_millis())?;
+        let mut connection = self.inner.connection.lock();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AppError::from)?;
+        let mut enqueued = 0_u64;
+        for task in load_all_tasks(&transaction)?
+            .into_iter()
+            .filter(Task::is_active)
+        {
+            delete_metadata(&transaction, &dedupe_failed_key(&task.id))?;
+            let job_key = dedupe_job_key(&task.id);
+            if metadata_get(&transaction, &job_key)?.is_some() {
+                continue;
+            }
+            let job = DedupeJob {
+                task_id: task.id,
+                enqueued_at: now.clone(),
+                attempts: 0,
+            };
+            metadata_set(&transaction, &job_key, &serde_json::to_string(&job)?)?;
+            enqueued += 1;
+        }
+        transaction.commit().map_err(AppError::from)?;
+        Ok(enqueued)
+    }
+
     pub fn dedupe_counts(&self) -> AppResult<DedupeCounts> {
         let connection = self.inner.connection.lock();
         Ok(DedupeCounts {
@@ -1380,6 +1408,30 @@ impl TaskService {
             .expect("candidate fingerprint validation requires an existing task")
             .task
             .clone();
+        let mut suggestion_exists = false;
+        for (metadata_key, suggestion) in
+            load_metadata_entries::<DedupeSuggestion>(&transaction, DEDUPE_SUGGESTION_PREFIX)?
+        {
+            if !dedupe_suggestion_is_for_pair(&suggestion, new_task_id, existing_task_id) {
+                continue;
+            }
+            if dedupe_suggestion_matches_pair_state(
+                &suggestion,
+                new_task_id,
+                expected_new_fingerprint,
+                existing_task_id,
+                expected_existing_fingerprint,
+            ) {
+                suggestion_exists = true;
+            } else {
+                delete_metadata(&transaction, &metadata_key)?;
+            }
+        }
+        if suggestion_exists {
+            delete_metadata(&transaction, &job_key)?;
+            transaction.commit().map_err(AppError::from)?;
+            return Ok(None);
+        }
 
         let suggestion = DedupeSuggestion {
             id: Uuid::new_v4().to_string(),
@@ -1886,6 +1938,32 @@ fn dedupe_failed_key(task_id: &str) -> String {
 
 fn dedupe_suggestion_key(id: &str) -> String {
     format!("{DEDUPE_SUGGESTION_PREFIX}{id}")
+}
+
+fn dedupe_suggestion_is_for_pair(
+    suggestion: &DedupeSuggestion,
+    left_id: &str,
+    right_id: &str,
+) -> bool {
+    (suggestion.new_task.id == left_id && suggestion.existing_task.id == right_id)
+        || (suggestion.new_task.id == right_id && suggestion.existing_task.id == left_id)
+}
+
+fn dedupe_suggestion_matches_pair_state(
+    suggestion: &DedupeSuggestion,
+    new_task_id: &str,
+    new_task_fingerprint: &str,
+    existing_task_id: &str,
+    existing_task_fingerprint: &str,
+) -> bool {
+    (suggestion.new_task.id == new_task_id
+        && suggestion.existing_task.id == existing_task_id
+        && suggestion.new_task_fingerprint == new_task_fingerprint
+        && suggestion.existing_task_fingerprint == existing_task_fingerprint)
+        || (suggestion.new_task.id == existing_task_id
+            && suggestion.existing_task.id == new_task_id
+            && suggestion.new_task_fingerprint == existing_task_fingerprint
+            && suggestion.existing_task_fingerprint == new_task_fingerprint)
 }
 
 fn task_fingerprint(task: &Task) -> AppResult<String> {
@@ -2972,6 +3050,209 @@ mod dedupe_tests {
                 .id,
             older.id
         );
+    }
+
+    #[test]
+    fn manual_scan_enqueues_active_tasks_after_automatic_jobs_are_settled() {
+        let service = service();
+        let first = service
+            .create_task(identified_input("First", 1))
+            .unwrap()
+            .result;
+        let second = service
+            .create_task(identified_input("Second", 2))
+            .unwrap()
+            .result;
+        for task_id in [&first.id, &second.id] {
+            let context = service.prepare_dedupe_context(task_id).unwrap().unwrap();
+            service
+                .commit_dedupe_no_match(
+                    task_id,
+                    &context.new_task.fingerprint,
+                    &context.candidate_fingerprint,
+                )
+                .unwrap();
+        }
+        service.complete_task(&second.id).unwrap();
+
+        assert_eq!(service.enqueue_active_dedupe_jobs().unwrap(), 1);
+        assert_eq!(
+            service
+                .list_pending_dedupe_jobs()
+                .unwrap()
+                .into_iter()
+                .map(|job| job.task_id)
+                .collect::<Vec<_>>(),
+            vec![first.id]
+        );
+    }
+
+    #[test]
+    fn manual_scan_preserves_an_automatic_job_while_adding_missing_active_tasks() {
+        let service = service();
+        let automatic = service
+            .create_task(identified_input("Automatic", 1))
+            .unwrap()
+            .result;
+        service
+            .record_dedupe_job_failure(&automatic.id, "provider_response")
+            .unwrap();
+        let settled = service
+            .create_task(identified_input("Settled", 2))
+            .unwrap()
+            .result;
+        let context = service
+            .prepare_dedupe_context(&settled.id)
+            .unwrap()
+            .unwrap();
+        service
+            .commit_dedupe_no_match(
+                &settled.id,
+                &context.new_task.fingerprint,
+                &context.candidate_fingerprint,
+            )
+            .unwrap();
+
+        assert_eq!(service.enqueue_active_dedupe_jobs().unwrap(), 1);
+        let jobs = service.list_pending_dedupe_jobs().unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(
+            jobs.iter()
+                .find(|job| job.task_id == automatic.id)
+                .unwrap()
+                .attempts,
+            1
+        );
+        assert_eq!(
+            jobs.iter()
+                .find(|job| job.task_id == settled.id)
+                .unwrap()
+                .attempts,
+            0
+        );
+    }
+
+    #[test]
+    fn manual_scan_does_not_duplicate_an_existing_suggestion() {
+        let service = service();
+        let existing = service
+            .create_task(identified_input("Existing", 1))
+            .unwrap()
+            .result;
+        let duplicate = service
+            .create_task(identified_input("Duplicate", 2))
+            .unwrap()
+            .result;
+        let existing_context = service
+            .prepare_dedupe_context(&existing.id)
+            .unwrap()
+            .unwrap();
+        service
+            .commit_dedupe_no_match(
+                &existing.id,
+                &existing_context.new_task.fingerprint,
+                &existing_context.candidate_fingerprint,
+            )
+            .unwrap();
+        suggestion(&service, &duplicate.id, &existing.id);
+
+        service.enqueue_active_dedupe_jobs().unwrap();
+        let existing_context = service
+            .prepare_dedupe_context(&existing.id)
+            .unwrap()
+            .unwrap();
+        service
+            .commit_dedupe_no_match(
+                &existing.id,
+                &existing_context.new_task.fingerprint,
+                &existing_context.candidate_fingerprint,
+            )
+            .unwrap();
+        let duplicate_context = service
+            .prepare_dedupe_context(&duplicate.id)
+            .unwrap()
+            .unwrap();
+        let candidate = &duplicate_context.active_candidates[0];
+
+        assert!(service
+            .commit_dedupe_suggestion(
+                &duplicate.id,
+                &duplicate_context.new_task.fingerprint,
+                &duplicate_context.candidate_fingerprint,
+                &existing.id,
+                &candidate.fingerprint,
+                merged("Duplicate suggestion"),
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(service.list_dedupe_suggestions().unwrap().len(), 1);
+        assert!(service.list_pending_dedupe_jobs().unwrap().is_empty());
+    }
+
+    #[test]
+    fn manual_scan_replaces_a_stale_suggestion_for_the_same_pair() {
+        let service = service();
+        let existing = service
+            .create_task(identified_input("Existing", 1))
+            .unwrap()
+            .result;
+        let duplicate = service
+            .create_task(identified_input("Duplicate", 2))
+            .unwrap()
+            .result;
+        let existing_context = service
+            .prepare_dedupe_context(&existing.id)
+            .unwrap()
+            .unwrap();
+        service
+            .commit_dedupe_no_match(
+                &existing.id,
+                &existing_context.new_task.fingerprint,
+                &existing_context.candidate_fingerprint,
+            )
+            .unwrap();
+        let stale = suggestion(&service, &duplicate.id, &existing.id);
+        service
+            .update_task(
+                &existing.id,
+                UpdateTaskPatch {
+                    title: Some("Existing, updated".into()),
+                    ..UpdateTaskPatch::default()
+                },
+            )
+            .unwrap();
+
+        service.enqueue_active_dedupe_jobs().unwrap();
+        let existing_context = service
+            .prepare_dedupe_context(&existing.id)
+            .unwrap()
+            .unwrap();
+        service
+            .commit_dedupe_no_match(
+                &existing.id,
+                &existing_context.new_task.fingerprint,
+                &existing_context.candidate_fingerprint,
+            )
+            .unwrap();
+        let duplicate_context = service
+            .prepare_dedupe_context(&duplicate.id)
+            .unwrap()
+            .unwrap();
+        let candidate = &duplicate_context.active_candidates[0];
+        let refreshed = service
+            .commit_dedupe_suggestion(
+                &duplicate.id,
+                &duplicate_context.new_task.fingerprint,
+                &duplicate_context.candidate_fingerprint,
+                &existing.id,
+                &candidate.fingerprint,
+                merged("Refreshed suggestion"),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(refreshed.id, stale.id);
+        assert_eq!(service.list_dedupe_suggestions().unwrap(), vec![refreshed]);
     }
 
     #[test]
