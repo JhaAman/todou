@@ -1,6 +1,7 @@
 use crate::{
     dedupe::{
-        emit_suggestions_changed, DedupeCoordinator, LlmSettingsStatus, SaveLlmSettingsInput,
+        emit_suggestions_changed, DedupeCoordinator, LlmSettingsStatus, ManualDedupeScanOutcome,
+        SaveLlmSettingsInput,
     },
     domain::{
         BootstrapPayload, Bucket, CreateTaskInput, ExportSnapshot, MergeSummary, OutboxMutation,
@@ -284,6 +285,15 @@ pub fn process_pending_dedupe(
     dedupe: State<'_, DedupeCoordinator>,
 ) {
     dedupe.schedule(app, service.inner().clone());
+}
+
+#[tauri::command]
+pub async fn run_dedupe_scan(
+    app: AppHandle,
+    service: State<'_, TaskService>,
+    dedupe: State<'_, DedupeCoordinator>,
+) -> AppResult<ManualDedupeScanOutcome> {
+    dedupe.run_manual_scan(app, service.inner().clone()).await
 }
 
 #[tauri::command]

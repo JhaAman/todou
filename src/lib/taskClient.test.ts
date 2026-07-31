@@ -134,6 +134,9 @@ describe("AI de-duplication client", () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === "get_llm_settings" || command === "save_llm_settings") return status;
       if (command === "list_dedupe_suggestions") return [];
+      if (command === "run_dedupe_scan") {
+        return { status: "completed" };
+      }
       if (command === "resolve_dedupe_suggestion") {
         return {
           status: "stale",
@@ -154,6 +157,7 @@ describe("AI de-duplication client", () => {
       taskClient.resolveDedupeSuggestion("suggestion-2", "merge"),
     ).resolves.toMatchObject({ status: "stale", revision: 7 });
     await taskClient.processPendingDedupe();
+    await expect(taskClient.runDedupeScan()).resolves.toEqual({ status: "completed" });
 
     expect(invoke).toHaveBeenCalledWith("get_llm_settings", undefined);
     expect(invoke).toHaveBeenCalledWith("save_llm_settings", {
@@ -165,6 +169,7 @@ describe("AI de-duplication client", () => {
       action: "merge",
     });
     expect(invoke).toHaveBeenCalledWith("process_pending_dedupe", undefined);
+    expect(invoke).toHaveBeenCalledWith("run_dedupe_scan", undefined);
   });
 
   it("subscribes to durable suggestion and credentials wake events", async () => {

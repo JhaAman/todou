@@ -68,10 +68,33 @@ pub struct LlmSettingsStatus {
     pub failed_jobs: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualDedupeScanOutcome {
+    pub status: ManualDedupeScanStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ManualDedupeScanStatus {
+    Completed,
+    AlreadyRunning,
+    ConfigurationRequired,
+    Failed,
+}
+
+#[derive(Clone, Copy)]
+enum DrainStatus {
+    Completed,
+    ConfigurationRequired,
+    Failed,
+}
+
 #[derive(Clone)]
 pub struct DedupeCoordinator {
     client: LlmClient,
     drain_lock: Arc<Mutex<()>>,
+    manual_scan_lock: Arc<Mutex<()>>,
 }
 
 impl DedupeCoordinator {
@@ -81,6 +104,7 @@ impl DedupeCoordinator {
         Ok(Self {
             client,
             drain_lock: Arc::new(Mutex::new(())),
+            manual_scan_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -89,6 +113,29 @@ impl DedupeCoordinator {
         tauri::async_runtime::spawn(async move {
             coordinator.drain(app, service).await;
         });
+    }
+
+    pub async fn run_manual_scan(
+        &self,
+        app: AppHandle,
+        service: TaskService,
+    ) -> AppResult<ManualDedupeScanOutcome> {
+        let _manual_guard = match self.manual_scan_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Ok(ManualDedupeScanOutcome {
+                    status: ManualDedupeScanStatus::AlreadyRunning,
+                });
+            }
+        };
+        let _drain_guard = self.drain_lock.lock().await;
+        service.enqueue_active_dedupe_jobs()?;
+        let status = match self.drain_locked(app, service).await {
+            DrainStatus::Completed => ManualDedupeScanStatus::Completed,
+            DrainStatus::ConfigurationRequired => ManualDedupeScanStatus::ConfigurationRequired,
+            DrainStatus::Failed => ManualDedupeScanStatus::Failed,
+        };
+        Ok(ManualDedupeScanOutcome { status })
     }
 
     pub fn settings_status(&self, service: &TaskService) -> AppResult<LlmSettingsStatus> {
@@ -147,21 +194,37 @@ impl DedupeCoordinator {
 
     async fn drain(&self, app: AppHandle, service: TaskService) {
         let _guard = self.drain_lock.lock().await;
+        self.drain_locked(app, service).await;
+    }
+
+    async fn drain_locked(&self, app: AppHandle, service: TaskService) -> DrainStatus {
         let mut processed = HashSet::new();
+        let mut failed = false;
 
         loop {
             let jobs = match service.list_pending_dedupe_jobs() {
                 Ok(jobs) => jobs,
                 Err(error) => {
                     tracing::warn!(%error, "could not read pending dedupe jobs");
-                    return;
+                    return DrainStatus::Failed;
                 }
             };
             let Some(job) = jobs
                 .into_iter()
                 .find(|job| !processed.contains(&job.task_id))
             else {
-                return;
+                let pending = match service.dedupe_counts() {
+                    Ok(counts) => counts.pending,
+                    Err(error) => {
+                        tracing::warn!(%error, "could not read dedupe completion state");
+                        return DrainStatus::Failed;
+                    }
+                };
+                return if failed || pending > 0 {
+                    DrainStatus::Failed
+                } else {
+                    DrainStatus::Completed
+                };
             };
             processed.insert(job.task_id.clone());
 
@@ -170,6 +233,7 @@ impl DedupeCoordinator {
                 Ok(None) => continue,
                 Err(error) => {
                     tracing::warn!(task_id = %job.task_id, %error, "could not prepare dedupe job");
+                    failed = true;
                     continue;
                 }
             };
@@ -180,20 +244,22 @@ impl DedupeCoordinator {
                 },
                 Err(error) => {
                     tracing::warn!(task_id = %job.task_id, %error, "could not read AI credentials");
-                    return;
+                    return DrainStatus::Failed;
                 }
             };
             if !credentials.has_any() {
                 emit_credentials_required(&app);
-                return;
+                return DrainStatus::ConfigurationRequired;
             }
 
             match self.reconcile_context(&context, &credentials).await {
                 Ok(Some((decision, existing_fingerprint))) => {
                     let Some(existing_id) = decision.duplicate_task_id else {
+                        failed = true;
                         continue;
                     };
                     let Some(merged_task) = decision.merged_task else {
+                        failed = true;
                         continue;
                     };
                     match service.commit_dedupe_suggestion(
@@ -204,9 +270,12 @@ impl DedupeCoordinator {
                         &existing_fingerprint,
                         merged_task,
                     ) {
-                        Ok(Some(_)) => emit_suggestions_changed(&app),
+                        Ok(Some(_)) => {
+                            emit_suggestions_changed(&app);
+                        }
                         Ok(None) => {}
                         Err(error) => {
+                            failed = true;
                             tracing::warn!(
                                 task_id = %context.job.task_id,
                                 %error,
@@ -221,6 +290,7 @@ impl DedupeCoordinator {
                         &context.new_task.fingerprint,
                         &context.candidate_fingerprint,
                     ) {
+                        failed = true;
                         tracing::warn!(
                             task_id = %context.job.task_id,
                             %error,
@@ -232,10 +302,13 @@ impl DedupeCoordinator {
                 | Err(FailureCategory::AuthOrAccess)
                 | Err(FailureCategory::Quota) => {
                     emit_credentials_required(&app);
-                    return;
+                    return DrainStatus::ConfigurationRequired;
                 }
-                Err(FailureCategory::Transient) => return,
+                Err(FailureCategory::Transient) => {
+                    return DrainStatus::Failed;
+                }
                 Err(FailureCategory::JobSpecific) => {
+                    failed = true;
                     if let Err(error) =
                         service.record_dedupe_job_failure(&context.job.task_id, "provider_response")
                     {

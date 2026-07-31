@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   dismissDedupeSuggestion: vi.fn(),
   resolveDedupeSuggestion: vi.fn(),
   processPendingDedupe: vi.fn(),
+  runDedupeScan: vi.fn(),
   subscribeDedupeSuggestions: vi.fn(),
   subscribeLlmCredentialsRequired: vi.fn(),
   listeners: new Map<string, () => void>(),
@@ -44,6 +45,7 @@ vi.mock("./lib/taskClient", async (importOriginal) => {
       dismissDedupeSuggestion: mocks.dismissDedupeSuggestion,
       resolveDedupeSuggestion: mocks.resolveDedupeSuggestion,
       processPendingDedupe: mocks.processPendingDedupe,
+      runDedupeScan: mocks.runDedupeScan,
       subscribeDedupeSuggestions: mocks.subscribeDedupeSuggestions,
       subscribeLlmCredentialsRequired: mocks.subscribeLlmCredentialsRequired,
     },
@@ -138,7 +140,13 @@ beforeEach(() => {
     processHadWakeListeners = mocks.listeners.has("todou://dedupe-suggestions-changed")
       && mocks.listeners.has("todou://llm-credentials-required");
   });
+  mocks.runDedupeScan.mockResolvedValue({ status: "completed" });
 });
+
+async function runDedupeScanFromPalette() {
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.click(await screen.findByRole("option", { name: /Check all tasks for duplicates/i }));
+}
 
 describe("App AI de-duplication lifecycle", () => {
   it("attaches wake listeners before processing focused startup jobs", async () => {
@@ -225,6 +233,86 @@ describe("App AI de-duplication lifecycle", () => {
     });
 
     expect(await screen.findByRole("dialog", { name: "AI task de-duplication" })).toBeInTheDocument();
+  });
+
+  it("shows progress and no-match feedback for an on-demand scan", async () => {
+    let finishScan: ((outcome: { status: "completed" }) => void) | undefined;
+    mocks.runDedupeScan.mockImplementation(() => new Promise((resolve) => {
+      finishScan = resolve;
+    }));
+    render(<App />);
+
+    await runDedupeScanFromPalette();
+    expect(await screen.findByRole("status")).toHaveTextContent("Checking all tasks for duplicates");
+
+    finishScan?.({ status: "completed" });
+    expect(await screen.findByRole("status")).toHaveTextContent("No duplicate tasks found");
+  });
+
+  it("opens the existing suggestion popup when an on-demand scan finds a match", async () => {
+    mocks.runDedupeScan.mockImplementation(async () => {
+      suggestions = [suggestion()];
+      return { status: "completed" };
+    });
+    render(<App />);
+
+    await runDedupeScanFromPalette();
+
+    expect(await screen.findByRole("region", { name: "Possible duplicate tasks" })).toHaveTextContent(
+      "Email the launch update",
+    );
+  });
+
+  it("reports durable suggestions instead of claiming an on-demand scan found nothing", async () => {
+    suggestions = [suggestion()];
+    mocks.runDedupeScan.mockResolvedValue({ status: "completed" });
+    render(<App />);
+    await screen.findByRole("region", { name: "Possible duplicate tasks" });
+
+    await runDedupeScanFromPalette();
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Found 1 possible duplicate");
+  });
+
+  it.each([
+    ["alreadyRunning", "A duplicate scan is already running"],
+    ["configurationRequired", "Configure AI de-duplication to run this scan"],
+    ["failed", "The duplicate scan could not finish"],
+  ] as const)("reports the %s on-demand scan outcome", async (status, message) => {
+    mocks.runDedupeScan.mockResolvedValue({ status });
+    render(<App />);
+
+    await runDedupeScanFromPalette();
+
+    expect(await screen.findByRole("status")).toHaveTextContent(message);
+    if (status === "configurationRequired") {
+      expect(await screen.findByRole("dialog", { name: "AI task de-duplication" })).toBeInTheDocument();
+    }
+  });
+
+  it("reports an unexpected on-demand scan error without disrupting startup processing", async () => {
+    mocks.runDedupeScan.mockRejectedValue(new Error("storage unavailable"));
+    render(<App />);
+    await waitFor(() => expect(mocks.processPendingDedupe).toHaveBeenCalledOnce());
+
+    await runDedupeScanFromPalette();
+
+    expect(await screen.findByRole("status")).toHaveTextContent("The duplicate scan could not start");
+    expect(mocks.processPendingDedupe).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes a result refresh failure from a scan start failure", async () => {
+    mocks.runDedupeScan.mockImplementation(async () => {
+      mocks.listDedupeSuggestions.mockRejectedValueOnce(new Error("read unavailable"));
+      return { status: "completed" };
+    });
+    render(<App />);
+
+    await runDedupeScanFromPalette();
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "The duplicate scan finished, but results could not be refreshed",
+    );
   });
 
   it("immediately requeues a stale resolution instead of treating it as merged", async () => {

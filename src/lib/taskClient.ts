@@ -59,6 +59,16 @@ export interface LlmSettingsStatus {
   failedJobs: number;
 }
 
+export type ManualDedupeScanStatus =
+  | "completed"
+  | "alreadyRunning"
+  | "configurationRequired"
+  | "failed";
+
+export interface ManualDedupeScanOutcome {
+  status: ManualDedupeScanStatus;
+}
+
 export interface SaveLlmSettingsInput {
   openaiApiKey?: string | null;
   anthropicApiKey?: string | null;
@@ -121,6 +131,7 @@ export interface TaskClient {
     action: DedupeResolutionAction,
   ): Promise<DedupeResolutionOutcome>;
   processPendingDedupe(): Promise<void>;
+  runDedupeScan(): Promise<ManualDedupeScanOutcome>;
   subscribeDedupeSuggestions(listener: () => void): Promise<() => void>;
   subscribeLlmCredentialsRequired(listener: () => void): Promise<() => void>;
   hideCurrentWindow(): Promise<void>;
@@ -402,6 +413,9 @@ function browserClient(): TaskClient {
       };
     },
     async processPendingDedupe() {},
+    async runDedupeScan() {
+      throw new Error("AI task de-duplication is available in the desktop app.");
+    },
     async subscribeDedupeSuggestions() {
       return () => undefined;
     },
@@ -517,6 +531,7 @@ function tauriClient(): TaskClient {
     async processPendingDedupe() {
       await invokeResult<unknown>("process_pending_dedupe");
     },
+    runDedupeScan: () => invokeResult<ManualDedupeScanOutcome>("run_dedupe_scan"),
     async subscribeDedupeSuggestions(listener) {
       const { listen } = await import("@tauri-apps/api/event");
       return listen("todou://dedupe-suggestions-changed", listener);

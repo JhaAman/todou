@@ -97,6 +97,7 @@ export default function App() {
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [llmSettings, setLlmSettings] = useState<LlmSettingsStatus>(emptyLlmSettings);
   const [dedupeSuggestions, setDedupeSuggestions] = useState<DedupeSuggestion[]>([]);
+  const [dedupeScanRunning, setDedupeScanRunning] = useState(false);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>(emptySyncSettings);
   const [syncSettingsLoaded, setSyncSettingsLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("not-connected");
@@ -128,8 +129,10 @@ export default function App() {
   const HeaderIcon = header.icon;
 
   const reloadDedupeSuggestions = useCallback(async () => {
-    if (!isTauriRuntime()) return;
-    setDedupeSuggestions(await taskClient.listDedupeSuggestions());
+    if (!isTauriRuntime()) return [];
+    const suggestions = await taskClient.listDedupeSuggestions();
+    setDedupeSuggestions(suggestions);
+    return suggestions;
   }, []);
 
   const reloadLlmSettings = useCallback(async () => {
@@ -296,6 +299,12 @@ export default function App() {
     }, 4_500);
   }, []);
 
+  const showPersistentNotice = useCallback((message: string) => {
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = null;
+    setNotice(message);
+  }, []);
+
   const showShortcutTip = useCallback((action: TaskShortcutAction, label = shortcutLabels[action]) => {
     if (shortcutTipTimerRef.current) window.clearTimeout(shortcutTipTimerRef.current);
     setShortcutTip({ action, label });
@@ -394,6 +403,54 @@ export default function App() {
     await processFocusedDedupe();
     return status;
   }, [processFocusedDedupe]);
+
+  const runDedupeScan = useCallback(async () => {
+    if (dedupeScanRunning) {
+      showNotice("A duplicate scan is already running");
+      return;
+    }
+    setDedupeScanRunning(true);
+    showPersistentNotice("Checking all tasks for duplicates…");
+    try {
+      let outcome;
+      try {
+        outcome = await taskClient.runDedupeScan();
+      } catch {
+        showNotice("The duplicate scan could not start");
+        return;
+      }
+      let suggestions: DedupeSuggestion[];
+      try {
+        [suggestions] = await Promise.all([
+          reloadDedupeSuggestions(),
+          reloadLlmSettings(),
+        ]);
+      } catch {
+        showNotice("The duplicate scan finished, but results could not be refreshed");
+        return;
+      }
+      if (outcome.status === "completed") {
+        showNotice(suggestions.length > 0
+          ? `Found ${suggestions.length} possible ${suggestions.length === 1 ? "duplicate" : "duplicates"}`
+          : "No duplicate tasks found");
+      } else if (outcome.status === "alreadyRunning") {
+        showNotice("A duplicate scan is already running");
+      } else if (outcome.status === "configurationRequired") {
+        setAiSettingsOpen(true);
+        showNotice("Configure AI de-duplication to run this scan");
+      } else {
+        showNotice("The duplicate scan could not finish");
+      }
+    } finally {
+      setDedupeScanRunning(false);
+    }
+  }, [
+    dedupeScanRunning,
+    reloadDedupeSuggestions,
+    reloadLlmSettings,
+    showNotice,
+    showPersistentNotice,
+  ]);
 
   const dismissDedupeSuggestion = useCallback(async (suggestion: DedupeSuggestion) => {
     await taskClient.dismissDedupeSuggestion(suggestion.id);
@@ -819,6 +876,8 @@ export default function App() {
         onExport={() => void exportTasks()}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAiSettings={openAiSettings}
+        onRunDedupeScan={() => void runDedupeScan()}
+        dedupeScanRunning={dedupeScanRunning}
         {...(import.meta.env.DEV && isTauriRuntime() ? { onBuildInstaller: () => void buildProductionApp() } : {})}
         selectedTask={selectedTask}
         canUndo={Boolean(controller.undo)}
