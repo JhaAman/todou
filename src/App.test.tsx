@@ -62,6 +62,11 @@ function storedTask(id: string): Task | undefined {
   return tasks.find((candidate) => candidate.id === id);
 }
 
+function storedTaskByTitle(title: string): Task | undefined {
+  const tasks = JSON.parse(localStorage.getItem(taskStoreKey) ?? "[]") as Task[];
+  return tasks.find((candidate) => candidate.title === title);
+}
+
 const crossLaneMoves: Array<{
   name: string;
   sourceBucket: Bucket;
@@ -339,12 +344,17 @@ describe("task move keyboard shortcuts", () => {
 describe("new task keyboard shortcuts", () => {
   beforeEach(() => localStorage.clear());
 
-  it("opens the task composer with unmodified Space when no task is selected", async () => {
+  it("creates an unscheduled Inbox task with unmodified Space", async () => {
     await renderApp([]);
 
     fireEvent.keyDown(document.body, { key: " ", code: "Space" });
+    fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Space capture" } });
+    fireEvent.submit(screen.getByRole("form", { name: /Add task to/i }));
 
-    expect(screen.getByRole("form", { name: /Add task to/i })).toBeInTheDocument();
+    await waitFor(() => expect(storedTaskByTitle("Space capture")).toMatchObject({
+      bucket: "inbox",
+      dueDate: null,
+    }));
   });
 
   it("does not use Space while an interactive control has focus", async () => {
@@ -366,12 +376,32 @@ describe("new task keyboard shortcuts", () => {
     expect(screen.queryByRole("form", { name: /Add task to/i })).not.toBeInTheDocument();
   });
 
-  it("keeps the configured Command-N shortcut working", async () => {
+  it("creates an unscheduled Inbox task with the configured Command-N shortcut", async () => {
     await renderApp([]);
 
     fireEvent.keyDown(document.body, { key: "n", metaKey: true });
+    fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Command capture" } });
+    fireEvent.submit(screen.getByRole("form", { name: /Add task to/i }));
 
-    expect(screen.getByRole("form", { name: /Add task to/i })).toBeInTheDocument();
+    await waitFor(() => expect(storedTaskByTitle("Command capture")).toMatchObject({
+      bucket: "inbox",
+      dueDate: null,
+    }));
+  });
+
+  it("creates a future-dated task from Today in Inbox", async () => {
+    await renderApp([]);
+    const navigation = within(screen.getByLabelText("Primary navigation"));
+    fireEvent.click(navigation.getByRole("button", { name: /^Today/ }));
+    fireEvent.click(navigation.getByRole("button", { name: "New task" }));
+    fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Prepare on monday" } });
+    fireEvent.submit(screen.getByRole("form", { name: /Add task to/i }));
+
+    await waitFor(() => expect(storedTaskByTitle("Prepare")).toMatchObject({
+      bucket: "inbox",
+      dueDate: expect.any(String),
+    }));
+    expect(screen.queryByText("Prepare", { selector: ".task-title" })).not.toBeInTheDocument();
   });
 
   it.each([

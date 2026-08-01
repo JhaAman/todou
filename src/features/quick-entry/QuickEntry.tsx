@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { parseNaturalLanguage } from "../../lib/naturalLanguage";
+import { localDateString, newTaskBucket } from "../../lib/newTaskSchedule";
 import { loadPreferences, savePreferences } from "../../lib/preferences";
 import { isTauriRuntime, taskClient } from "../../lib/taskClient";
 import { applyTheme } from "../../lib/themes";
@@ -23,11 +24,6 @@ const tokenIcons = {
   area: UserRound,
   bucket: Inbox,
 };
-
-function today(): string {
-  const date = new Date();
-  return `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, "0")}-${`${date.getDate()}`.padStart(2, "0")}`;
-}
 
 export function QuickEntry() {
   const preferences = useRef(loadPreferences());
@@ -43,7 +39,13 @@ export function QuickEntry() {
   const finalPriority = parsed.fields.priority ?? priority;
   const finalArea = parsed.fields.area ?? area;
   const finalDueDate = parsed.fields.dueDate ?? dueDate;
-  const finalBucket = finalDueDate && finalDueDate <= today() ? "today" : (parsed.fields.bucket ?? bucket);
+  const finalBucket = newTaskBucket(parsed.fields.bucket ?? bucket, finalDueDate);
+
+  const toggleToday = () => {
+    const moveToToday = finalBucket === "inbox";
+    setBucket(moveToToday ? "today" : "inbox");
+    setDueDate(moveToToday ? localDateString() : null);
+  };
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -163,7 +165,7 @@ export function QuickEntry() {
           <div className="quick-options" role="group" aria-label="Task details">
             <button className={finalPriority === "high" ? "is-active priority" : ""} onClick={() => setPriority(finalPriority === "high" ? "low" : "high")} title="Toggle priority" aria-label="High priority" aria-pressed={finalPriority === "high"}><Flag size={14} fill={finalPriority === "high" ? "currentColor" : "none"} />{finalPriority === "high" ? "High" : "Low"}</button>
             <button className={`is-active-${finalArea}`} onClick={() => setArea(finalArea === "work" ? "personal" : "work")} title={`Set area to ${finalArea === "work" ? "personal" : "work"}`} aria-label="Work task" aria-pressed={finalArea === "work"}><UserRound size={14} />{finalArea === "work" ? "Work" : "Personal"}</button>
-            <button onClick={() => setBucket(finalBucket === "inbox" ? "today" : "inbox")} title={`Move to ${finalBucket === "inbox" ? "Today" : "Inbox"}`} aria-label="Today list" aria-pressed={finalBucket === "today"}>{finalBucket === "inbox" ? <Inbox size={14} /> : <CornerDownLeft size={14} />}{finalBucket === "inbox" ? "Inbox" : "Today"}</button>
+            <button onClick={toggleToday} title={`Move to ${finalBucket === "inbox" ? "Today" : "Inbox"}`} aria-label="Today list" aria-pressed={finalBucket === "today"}>{finalBucket === "inbox" ? <Inbox size={14} /> : <CornerDownLeft size={14} />}{finalBucket === "inbox" ? "Inbox" : "Today"}</button>
             <label className={finalDueDate ? "has-value" : ""} title="Due date"><CalendarDays size={14} /><input type="date" value={finalDueDate ?? ""} onChange={(event) => setDueDate(event.target.value || null)} aria-label="Due date" /></label>
           </div>
           <button

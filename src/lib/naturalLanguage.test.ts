@@ -24,11 +24,27 @@ describe("natural-language capture", () => {
     expect(parsed.fields.dueDate).toBeUndefined();
   });
 
+  it("resolves Monday forward without placing it in Today", () => {
+    const parsed = parseNaturalLanguage("Prepare on monday", new Date(2026, 6, 21, 9, 0, 0));
+
+    expect(parsed.fields).toMatchObject({ dueDate: "2026-07-27" });
+    expect(parsed.fields.bucket).toBeUndefined();
+  });
+
   it("moves due-today capture into Today", () => {
     const parsed = parseNaturalLanguage("Call Jordan today /inbox", referenceDate);
 
     expect(parsed.fields.dueDate).toBe("2026-07-20");
     expect(parsed.fields.bucket).toBe("today");
+  });
+
+  it("treats the explicit Today token as a due-today capture", () => {
+    const parsed = parseNaturalLanguage("Call Jordan /today", referenceDate);
+
+    expect(parsed.fields).toMatchObject({
+      bucket: "today",
+      dueDate: "2026-07-20",
+    });
   });
 
   it("normalizes hour and minute estimates", () => {

@@ -19,6 +19,7 @@ import {
   type Task,
   type TaskFilter,
 } from "./types";
+import { newTaskBucket } from "./newTaskSchedule";
 
 export interface ExportResult {
   json?: string;
@@ -234,9 +235,7 @@ function browserClient(): TaskClient {
     async createTask(input) {
       const tasks = readBrowserTasks();
       const now = new Date().toISOString();
-      const dueToday = Boolean(input.dueDate && input.dueDate <= localDateString());
-      let bucket = input.bucket ?? "inbox";
-      if (dueToday && bucket === "inbox") bucket = "today";
+      const bucket = newTaskBucket(input.bucket, input.dueDate);
       if (bucket === "in_progress") ensureInProgressCapacity(tasks);
       const priority = input.priority ?? "low";
       const task: Task = {

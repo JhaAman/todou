@@ -36,6 +36,14 @@ describe("parseQuickTask", () => {
     });
   });
 
+  it("treats explicit Today placement as due today", () => {
+    expect(parseQuickTask("Call Jordan /today", referenceDate)).toEqual({
+      title: "Call Jordan",
+      bucket: "today",
+      dueDate: "2026-07-20",
+    });
+  });
+
   it("rejects an estimate shorter than one minute", () => {
     expect(() => parseQuickTask("Impossible task 0m", referenceDate)).toThrow(
       "Estimate must be between 1 minute and 24 hours.",

@@ -12,6 +12,7 @@
 ## Invariants
 
 - `in_progress`, `today`, and `inbox` are exclusive. In Progress holds at most three active tasks. Moving to Inbox clears `dueDate`; setting a due date on or before the local date moves an Inbox task to Today.
+- New task creation ignores the invoking view: non-In Progress tasks start in Inbox unless due on or before the local date; `/today` and Quick Entry's Today control save today's date.
 - Sort by bucket, then high before low, then bytewise `orderKey`, then UUID. Do not add a list-wide order-key rebalance.
 - `{bucket, due_date}` is the single remote `schedule` register. PostgreSQL JSON uses `due_date`; public Rust/TypeScript task objects serialize as `dueDate`.
 - Preferences and Supabase credentials stay device-local. Hosted access uses only a publishable/anonymous key, never a service-role key.
