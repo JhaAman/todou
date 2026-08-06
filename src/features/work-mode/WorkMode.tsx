@@ -8,6 +8,7 @@ import {
 import type { Task } from "../../lib/types";
 
 const congratulationsDurationMs = 1_500;
+const workModeTaskLimit = 3;
 
 export type WorkModeClient = Pick<
   TaskClient,
@@ -24,7 +25,7 @@ interface WorkModeProps {
 }
 
 export function WorkMode({ client = taskClient }: WorkModeProps) {
-  const [currentTask, setCurrentTask] = useState<Task | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [busy, setBusy] = useState(false);
   const [celebrating, setCelebrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +48,7 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
   const applyActive = useCallback((active: boolean) => {
     activeRef.current = active;
     if (!active) {
-      setCurrentTask(null);
+      setTasks([]);
       resetCelebration();
     }
   }, [resetCelebration]);
@@ -76,7 +77,7 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
     if (celebratingRef.current) return;
     celebratingRef.current = true;
     setCelebrating(true);
-    setCurrentTask(null);
+    setTasks([]);
     playCompletionTone();
     congratulationsTimerRef.current = window.setTimeout(() => {
       void stop();
@@ -86,17 +87,16 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
   const refreshTasks = useCallback(async () => {
     if (!activeRef.current || celebratingRef.current) return;
     try {
-      const tasks = await client.listTasks({
+      const currentTasks = await client.listTasks({
         bucket: "in_progress",
         completed: false,
       });
       if (!activeRef.current || celebratingRef.current) return;
-      const first = tasks[0];
-      if (!first) {
+      if (!currentTasks.length) {
         finishAll();
         return;
       }
-      setCurrentTask(first);
+      setTasks(currentTasks.slice(0, workModeTaskLimit));
       setError(null);
     } catch (reason) {
       if (activeRef.current) {
@@ -162,13 +162,13 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
     }
   }, []);
 
-  const completeCurrent = async () => {
-    const activeTask = currentTask;
-    if (!activeTask || busy || celebratingRef.current) return;
+  const completeTask = async (taskId: string) => {
+    if (busy || celebratingRef.current) return;
     setBusy(true);
     setError(null);
     try {
-      await client.completeTask(activeTask.id);
+      await client.completeTask(taskId);
+      setTasks((current) => current.filter((task) => task.id !== taskId));
       await refreshTasks();
     } catch (reason) {
       setError(readErrorMessage(reason, "Could not complete this task"));
@@ -189,7 +189,7 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
     );
   }
 
-  if (!currentTask) {
+  if (!tasks.length) {
     return (
       <main className={`work-mode-window is-loading${error ? " has-error" : ""}`}>
         <span>{error ?? "Starting work mode…"}</span>
@@ -204,27 +204,31 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
 
   return (
     <main className="work-mode-window">
-      <section className="work-mode-task">
+      <section className="work-mode-task-list" aria-label="In Progress tasks">
         <span className={error ? "is-error" : ""}>
-          {error ?? "Focusing now"}
+          {error ?? `${tasks.length} in progress`}
         </span>
-        <strong title={currentTask.title}>
-          {currentTask.title}
-        </strong>
+        <ul>
+          {tasks.map((task) => (
+            <li className="work-mode-task" key={task.id}>
+              <strong title={task.title}>{task.title}</strong>
+              <button
+                type="button"
+                tabIndex={-1}
+                className="is-done"
+                disabled={busy}
+                onClick={() => void completeTask(task.id)}
+                aria-label={`Mark ${task.title} done`}
+                title="Done"
+              >
+                <Check size={15} strokeWidth={2.4} />
+              </button>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <div className="work-mode-controls">
-        <button
-          type="button"
-          tabIndex={-1}
-          className="is-done"
-          disabled={busy}
-          onClick={() => void completeCurrent()}
-          aria-label="Mark task done"
-          title="Done"
-        >
-          <Check size={17} strokeWidth={2.4} />
-        </button>
         <button
           type="button"
           tabIndex={-1}

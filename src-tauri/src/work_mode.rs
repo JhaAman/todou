@@ -13,7 +13,7 @@ mod native_macos;
 const WORK_MODE_METADATA_KEY: &str = "work_mode_state_v2";
 const WORK_MODE_EVENT: &str = "todou://work-mode-active-changed";
 const WORK_WINDOW_GEOMETRY_VERSION: u32 = 1;
-const WORK_WINDOW_HEIGHT_POINTS: u32 = 72;
+const WORK_WINDOW_HEIGHT_POINTS: u32 = 120;
 const WORK_WINDOW_MIN_WIDTH_POINTS: u32 = 320;
 const WORK_WINDOW_DEFAULT_WIDTH_POINTS: u32 = 500;
 const WORK_WINDOW_MAX_WIDTH_POINTS: u32 = 720;

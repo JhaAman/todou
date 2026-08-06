@@ -64,16 +64,42 @@ function fakeClient(tasks: Task[]): WorkModeClient & {
 }
 
 describe("work mode", () => {
-  it("shows only the first ordered In Progress task", async () => {
+  it("shows every ordered In Progress task", async () => {
     const client = fakeClient([
       task("first", "Write the launch brief"),
       task("second", "Review the metrics"),
+      task("third", "Ship the release"),
     ]);
 
     render(<WorkMode client={client} />);
 
     expect(await screen.findByText("Write the launch brief")).toBeInTheDocument();
-    expect(screen.queryByText("Review the metrics")).not.toBeInTheDocument();
+    expect(screen.getByText("Review the metrics")).toBeInTheDocument();
+    expect(screen.getByText("Ship the release")).toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole("button", { name: /^Mark .* done$/ })
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+        "Mark Write the launch brief done",
+        "Mark Review the metrics done",
+        "Mark Ship the release done",
+      ]);
+  });
+
+  it("never displays more than the three-task limit", async () => {
+    const client = fakeClient([
+      task("first", "Write the launch brief"),
+      task("second", "Review the metrics"),
+      task("third", "Ship the release"),
+      task("fourth", "Plan the follow-up"),
+    ]);
+
+    render(<WorkMode client={client} />);
+
+    expect(await screen.findByText("Write the launch brief")).toBeInTheDocument();
+    expect(screen.getByText("Ship the release")).toBeInTheDocument();
+    expect(screen.queryByText("Plan the follow-up")).not.toBeInTheDocument();
   });
 
   it("does not show a countdown or timer controls", async () => {
@@ -107,18 +133,20 @@ describe("work mode", () => {
     expect(screen.queryByText("Starting work mode…")).not.toBeInTheDocument();
   });
 
-  it("advances to the next ordered task after Done", async () => {
+  it("removes whichever task is marked Done", async () => {
     const client = fakeClient([
       task("first", "Write the launch brief"),
       task("second", "Review the metrics"),
+      task("third", "Ship the release"),
     ]);
     render(<WorkMode client={client} />);
     await screen.findByText("Write the launch brief");
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark task done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark Review the metrics done" }));
 
-    expect(await screen.findByText("Review the metrics")).toBeInTheDocument();
-    expect(screen.queryByText("Write the launch brief")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Review the metrics")).not.toBeInTheDocument());
+    expect(screen.getByText("Write the launch brief")).toBeInTheDocument();
+    expect(screen.getByText("Ship the release")).toBeInTheDocument();
   });
 
   it("can start again after finishing every task", async () => {
@@ -135,7 +163,7 @@ describe("work mode", () => {
     render(<WorkMode client={client} />);
     await screen.findByText("Finish the launch brief");
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark task done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark Finish the launch brief done" }));
     expect(await screen.findByText("All done")).toBeInTheDocument();
     await waitFor(() => expect(client.stopWorkMode).toHaveBeenCalled(), {
       timeout: 2_500,
