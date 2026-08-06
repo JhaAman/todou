@@ -26,10 +26,10 @@
   --shadow: #00000073;
   --text-strong: var(--text);
   --text-meta: color-mix(in srgb, var(--text-secondary) 90%, var(--text-muted));
-  --area-work-mark: color-mix(in srgb, var(--blue) 80%, var(--text));
-  --area-personal-mark: color-mix(in srgb, var(--orange) 80%, var(--text));
-  --area-work-fg: color-mix(in srgb, var(--blue) 58%, var(--text));
-  --area-personal-fg: color-mix(in srgb, var(--orange) 58%, var(--text));
+  --area-work-mark: #41d9ff;
+  --area-personal-mark: #ff5bd8;
+  --area-work-fg: color-mix(in srgb, var(--area-work-mark) 50%, var(--text));
+  --area-personal-fg: color-mix(in srgb, var(--area-personal-mark) 50%, var(--text));
   --accent-fg: color-mix(in srgb, var(--accent) 60%, var(--text));
   --danger-fg: color-mix(in srgb, var(--danger) 45%, var(--text));
   --focus-ring: #ffffff;
