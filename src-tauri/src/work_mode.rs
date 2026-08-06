@@ -44,6 +44,8 @@ struct WorkArea {
 struct PersistedWorkModeState {
     #[serde(default)]
     active: bool,
+    #[serde(default, rename = "session", skip_serializing)]
+    legacy_session: Option<serde_json::Value>,
     #[serde(default)]
     geometry: Option<WorkWindowGeometry>,
     #[serde(default)]
@@ -332,6 +334,9 @@ fn write_persisted_state(service: &TaskService, state: &PersistedWorkModeState) 
 }
 
 fn normalize_persisted_state(mut state: PersistedWorkModeState) -> PersistedWorkModeState {
+    if state.legacy_session.take().is_some() {
+        state.active = true;
+    }
     if state.geometry_version != WORK_WINDOW_GEOMETRY_VERSION {
         state.geometry = None;
         state.geometry_version = WORK_WINDOW_GEOMETRY_VERSION;
@@ -800,6 +805,7 @@ mod tests {
     fn drops_only_legacy_geometry_coordinates() {
         let state = normalize_persisted_state(PersistedWorkModeState {
             active: true,
+            legacy_session: None,
             geometry: Some(WorkWindowGeometry {
                 x: 10,
                 y: 20,
@@ -812,6 +818,17 @@ mod tests {
         assert!(state.active);
         assert_eq!(state.geometry, None);
         assert_eq!(state.geometry_version, WORK_WINDOW_GEOMETRY_VERSION);
+    }
+
+    #[test]
+    fn restores_legacy_session_as_active() {
+        let state: PersistedWorkModeState = serde_json::from_value(serde_json::json!({
+            "session": { "taskId": "task-1" },
+            "geometryVersion": WORK_WINDOW_GEOMETRY_VERSION,
+        }))
+        .unwrap();
+
+        assert!(normalize_persisted_state(state).active);
     }
 
     #[test]

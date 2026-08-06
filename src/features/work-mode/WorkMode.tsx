@@ -31,6 +31,7 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
   const activeRef = useRef(false);
   const activeEventSequenceRef = useRef(0);
   const celebratingRef = useRef(false);
+  const stoppingRef = useRef(false);
   const congratulationsTimerRef = useRef<number | null>(null);
   const refreshTasksRef = useRef<() => void>(() => undefined);
 
@@ -52,7 +53,8 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
   }, [resetCelebration]);
 
   const stop = useCallback(async () => {
-    if (busy) return;
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
     const eventSequence = activeEventSequenceRef.current;
     setBusy(true);
     setError(null);
@@ -65,9 +67,10 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
       setError(readErrorMessage(reason, "Could not stop work mode"));
       resetCelebration();
     } finally {
+      stoppingRef.current = false;
       setBusy(false);
     }
-  }, [applyActive, busy, client, resetCelebration]);
+  }, [applyActive, client, resetCelebration]);
 
   const finishAll = useCallback(() => {
     if (celebratingRef.current) return;

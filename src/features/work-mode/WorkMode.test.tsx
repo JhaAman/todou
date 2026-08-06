@@ -124,6 +124,14 @@ describe("work mode", () => {
   it("can start again after finishing every task", async () => {
     const tasks = [task("first", "Finish the launch brief")];
     const client = fakeClient(tasks);
+    vi.mocked(client.completeTask).mockImplementation(async (id) => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      const current = tasks.find((candidate) => candidate.id === id);
+      if (!current) throw new Error("Task not found");
+      tasks.splice(0, 1);
+      client.emitTasks();
+      return { ...current, completedAt: new Date().toISOString() };
+    });
     render(<WorkMode client={client} />);
     await screen.findByText("Finish the launch brief");
 
