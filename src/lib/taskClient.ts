@@ -1,5 +1,4 @@
 import { demoTasks } from "./demoData";
-import type { WorkSessionSnapshot } from "../features/work-mode/workSession";
 import { loadPreferences } from "./preferences";
 import { compareTasks } from "./taskOrdering";
 import {
@@ -24,11 +23,6 @@ import { newTaskBucket } from "./newTaskSchedule";
 export interface ExportResult {
   json?: string;
   path?: string;
-}
-
-export interface SystemActivitySample {
-  idleMs: number | null;
-  awakeTimeMs: number | null;
 }
 
 export function readErrorMessage(reason: unknown, fallback: string): string {
@@ -136,13 +130,9 @@ export interface TaskClient {
   subscribeDedupeSuggestions(listener: () => void): Promise<() => void>;
   subscribeLlmCredentialsRequired(listener: () => void): Promise<() => void>;
   hideCurrentWindow(): Promise<void>;
-  startWorkMode(): Promise<WorkSessionSnapshot>;
-  loadWorkModeSession(): Promise<WorkSessionSnapshot | null>;
-  checkpointWorkModeSession(session: WorkSessionSnapshot): Promise<WorkSessionSnapshot>;
-  subscribeWorkModeSession(
-    listener: (session: WorkSessionSnapshot | null) => void,
-  ): Promise<() => void>;
-  getSystemActivitySample(): Promise<SystemActivitySample>;
+  startWorkMode(): Promise<void>;
+  loadWorkModeActive(): Promise<boolean>;
+  subscribeWorkModeActive(listener: (active: boolean) => void): Promise<() => void>;
   stopWorkMode(): Promise<void>;
 }
 
@@ -427,17 +417,11 @@ function browserClient(): TaskClient {
     async startWorkMode() {
       throw new Error("Work mode is available in the Todou desktop app.");
     },
-    async loadWorkModeSession() {
-      return null;
+    async loadWorkModeActive() {
+      return false;
     },
-    async checkpointWorkModeSession(session) {
-      return session;
-    },
-    async subscribeWorkModeSession() {
+    async subscribeWorkModeActive() {
       return () => undefined;
-    },
-    async getSystemActivitySample() {
-      return { idleMs: null, awakeTimeMs: null };
     },
     async stopWorkMode() {},
   };
@@ -542,14 +526,12 @@ function tauriClient(): TaskClient {
     async hideCurrentWindow() {
       await invoke<void>("hide_quick_entry");
     },
-    startWorkMode: () => invokeResult<WorkSessionSnapshot>("start_work_mode"),
-    loadWorkModeSession: () => invokeResult<WorkSessionSnapshot | null>("load_work_mode_session"),
-    checkpointWorkModeSession: (session) => invokeResult<WorkSessionSnapshot>("checkpoint_work_mode_session", { session }),
-    async subscribeWorkModeSession(listener) {
+    startWorkMode: () => invoke<void>("start_work_mode"),
+    loadWorkModeActive: () => invoke<boolean>("load_work_mode_active"),
+    async subscribeWorkModeActive(listener) {
       const { listen } = await import("@tauri-apps/api/event");
-      return listen<WorkSessionSnapshot | null>("todou://work-mode-session-changed", (event) => listener(event.payload));
+      return listen<boolean>("todou://work-mode-active-changed", (event) => listener(event.payload));
     },
-    getSystemActivitySample: () => invoke<SystemActivitySample>("get_system_activity_sample"),
     async stopWorkMode() {
       await invoke<void>("stop_work_mode");
     },
