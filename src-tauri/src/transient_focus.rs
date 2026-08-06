@@ -100,6 +100,7 @@ mod platform {
         let app_for_native = app.clone();
         let window_for_native = window.clone();
         run_on_main(app, move || {
+            configure_quick_window(&window_for_native)?;
             let external = frontmost_external();
             let main_focused = app_for_native
                 .get_webview_window("main")
@@ -118,7 +119,6 @@ mod platform {
                         .map(RestoreTarget::External)
                 });
             let generation = state.ledger.lock().begin_quick_entry(candidate);
-            configure_quick_window(&window_for_native)?;
             Ok(generation)
         })
     }
@@ -133,10 +133,21 @@ mod platform {
         let window_for_native = window.clone();
         run_on_main(app, move || {
             let state = app_for_native.state::<TransientFocus>();
+            let matches = state
+                .ledger
+                .lock()
+                .quick_entry
+                .as_ref()
+                .is_some_and(|session| {
+                    expected_generation.is_none_or(|expected| expected == session.generation)
+                });
+            if !matches {
+                return Ok(false);
+            }
+            window_for_native.hide().map_err(AppError::storage)?;
             let Some(target) = state.ledger.lock().finish_quick_entry(expected_generation) else {
                 return Ok(false);
             };
-            window_for_native.hide().map_err(AppError::storage)?;
             if restore && current_application_is_active() {
                 restore_target(&app_for_native, target);
             }
@@ -163,8 +174,7 @@ mod platform {
             let state = app_for_native.state::<TransientFocus>();
             if let Some(external) = frontmost_external() {
                 let mut ledger = state.ledger.lock();
-                let generation = ledger.work_mode_generation;
-                ledger.observe_work_mode_external(generation, external);
+                ledger.work_mode_target = Some(external);
                 return Ok(None);
             }
             let ledger = state.ledger.lock();
@@ -241,6 +251,14 @@ mod platform {
             thread::sleep(Duration::from_millis(50));
             let app_for_native = app.clone();
             let _ = app.run_on_main_thread(move || {
+                if ["main", "quick-entry"].into_iter().any(|label| {
+                    app_for_native
+                        .get_webview_window(label)
+                        .and_then(|window| window.is_focused().ok())
+                        .unwrap_or(false)
+                }) {
+                    return;
+                }
                 let state = app_for_native.state::<TransientFocus>();
                 if let Some(external) = frontmost_external() {
                     state
@@ -288,7 +306,8 @@ mod platform {
         ledger: Mutex<FocusLedger<()>>,
     }
 
-    pub fn prepare_quick_entry(app: &AppHandle, _window: &WebviewWindow) -> AppResult<u64> {
+    pub fn prepare_quick_entry(app: &AppHandle, window: &WebviewWindow) -> AppResult<u64> {
+        window.center().map_err(crate::error::AppError::storage)?;
         Ok(app
             .state::<TransientFocus>()
             .ledger
@@ -302,16 +321,24 @@ mod platform {
         expected_generation: Option<u64>,
         _restore: bool,
     ) -> AppResult<bool> {
-        let matched = app
-            .state::<TransientFocus>()
+        let state = app.state::<TransientFocus>();
+        let matches = state
+            .ledger
+            .lock()
+            .quick_entry
+            .as_ref()
+            .is_some_and(|session| {
+                expected_generation.is_none_or(|expected| expected == session.generation)
+            });
+        if !matches {
+            return Ok(false);
+        }
+        window.hide().map_err(crate::error::AppError::storage)?;
+        Ok(state
             .ledger
             .lock()
             .finish_quick_entry(expected_generation)
-            .is_some();
-        if matched {
-            window.hide().map_err(crate::error::AppError::storage)?;
-        }
-        Ok(matched)
+            .is_some())
     }
 
     pub fn begin_work_mode(app: &AppHandle) -> AppResult<()> {
@@ -386,6 +413,17 @@ mod tests {
             Some(Some(RestoreTarget::TodouMain))
         );
         assert_eq!(ledger.finish_quick_entry(Some(generation)), None);
+    }
+
+    #[test]
+    fn native_window_events_can_finish_the_current_quick_entry() {
+        let mut ledger = FocusLedger::default();
+        ledger.begin_quick_entry(Some(RestoreTarget::External("Spotify")));
+
+        assert_eq!(
+            ledger.finish_quick_entry(None),
+            Some(Some(RestoreTarget::External("Spotify")))
+        );
     }
 
     #[test]
