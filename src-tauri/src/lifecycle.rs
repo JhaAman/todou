@@ -1,7 +1,7 @@
 use crate::{
     error::{AppError, AppResult},
     service::TaskService,
-    work_mode,
+    transient_focus, work_mode,
 };
 use tauri::{
     menu::{Menu, MenuItem, MenuItemKind},
@@ -12,6 +12,12 @@ use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 pub const DEFAULT_QUICK_ENTRY_SHORTCUT: &str = "Control+Space";
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickEntryShown {
+    session_id: u64,
+}
 
 pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     install_application_menu(app)?;
@@ -129,19 +135,32 @@ pub fn show_quick_entry(app: &AppHandle) -> AppResult<()> {
     let window = app
         .get_webview_window("quick-entry")
         .ok_or_else(|| AppError::storage("quick-entry window is unavailable"))?;
-    window.center().map_err(AppError::storage)?;
-    window.show().map_err(AppError::storage)?;
-    window.set_focus().map_err(AppError::storage)?;
-    window
-        .emit("todou://quick-entry-shown", ())
+    let session_id = transient_focus::prepare_quick_entry(app, &window)?;
+    let show_result = window
+        .show()
         .map_err(AppError::storage)
+        .and_then(|_| window.set_focus().map_err(AppError::storage))
+        .and_then(|_| {
+            window
+                .emit("todou://quick-entry-shown", QuickEntryShown { session_id })
+                .map_err(AppError::storage)
+        });
+    if show_result.is_err() {
+        let _ = transient_focus::dismiss_quick_entry(app, &window, Some(session_id), true);
+    }
+    show_result
 }
 
-pub fn hide_quick_entry(app: &AppHandle) -> AppResult<()> {
+pub fn dismiss_quick_entry(
+    app: &AppHandle,
+    session_id: Option<u64>,
+    restore: bool,
+) -> AppResult<()> {
     let window = app
         .get_webview_window("quick-entry")
         .ok_or_else(|| AppError::storage("quick-entry window is unavailable"))?;
-    window.hide().map_err(AppError::storage)
+    transient_focus::dismiss_quick_entry(app, &window, session_id, restore)?;
+    Ok(())
 }
 
 pub fn register_quick_entry_shortcut(

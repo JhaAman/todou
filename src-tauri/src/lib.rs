@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod service;
 mod socket;
 pub mod sync;
+mod transient_focus;
 mod work_mode;
 
 use crate::{dedupe::DedupeCoordinator, service::TaskService, sync::SyncWake};
@@ -56,6 +57,7 @@ pub fn run() {
             app.manage(service.clone());
             app.manage(wake.clone());
             app.manage(dedupe);
+            app.manage(transient_focus::TransientFocus::default());
             let socket_app = app.handle().clone();
             let socket_wake = wake.clone();
             let socket_service = service.clone();
@@ -76,10 +78,14 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "quick-entry" {
+                    let _ = lifecycle::dismiss_quick_entry(window.app_handle(), None, true);
+                } else {
+                    let _ = window.hide();
+                }
             }
             WindowEvent::Focused(false) if window.label() == "quick-entry" => {
-                let _ = window.hide();
+                let _ = lifecycle::dismiss_quick_entry(window.app_handle(), None, false);
             }
             WindowEvent::Focused(true) if window.label() == "main" => {
                 let app = window.app_handle();

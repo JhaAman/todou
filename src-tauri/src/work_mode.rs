@@ -2,6 +2,7 @@ use crate::{
     domain::{Bucket, Task, TaskFilter},
     error::{AppError, AppResult},
     service::TaskService,
+    transient_focus,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -243,7 +244,7 @@ pub(crate) fn deactivate_after_interaction(app: &AppHandle) -> AppResult<()> {
             }
         }
     }
-    deactivate_todou(app)
+    transient_focus::restore_after_work_mode_interaction(app)
 }
 
 fn clamp_geometry_to_work_area(
@@ -629,12 +630,13 @@ fn emit_session(app: &AppHandle, snapshot: Option<&WorkSessionSnapshot>) -> AppR
 fn reveal_work_mode(app: &AppHandle) -> AppResult<()> {
     let work = work_window(app)?;
     let main = main_window(app)?;
+    transient_focus::begin_work_mode(app)?;
     show_work_window(&work)?;
     if let Err(error) = main.hide().map_err(AppError::storage) {
         let _ = work.hide();
         return Err(error);
     }
-    deactivate_todou(app)
+    transient_focus::restore_after_work_mode_interaction(app)
 }
 
 #[cfg(target_os = "macos")]
@@ -648,6 +650,7 @@ fn show_work_window(window: &WebviewWindow) -> AppResult<()> {
 }
 
 fn leave_work_mode(app: &AppHandle) -> AppResult<()> {
+    transient_focus::end_work_mode(app);
     let hide_result = work_window(app).and_then(|window| window.hide().map_err(AppError::storage));
     let main = main_window(app);
     let show_result = main
@@ -783,24 +786,6 @@ fn system_awake_time_millis() -> Option<u64> {
 #[cfg(not(target_os = "macos"))]
 fn system_awake_time_millis() -> Option<u64> {
     None
-}
-
-#[cfg(target_os = "macos")]
-fn deactivate_todou(app: &AppHandle) -> AppResult<()> {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::NSApplication;
-
-    app.run_on_main_thread(|| {
-        if let Some(main_thread) = MainThreadMarker::new() {
-            NSApplication::sharedApplication(main_thread).deactivate();
-        }
-    })
-    .map_err(AppError::storage)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn deactivate_todou(_app: &AppHandle) -> AppResult<()> {
-    Ok(())
 }
 
 #[cfg(test)]

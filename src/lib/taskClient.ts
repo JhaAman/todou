@@ -135,7 +135,7 @@ export interface TaskClient {
   runDedupeScan(): Promise<ManualDedupeScanOutcome>;
   subscribeDedupeSuggestions(listener: () => void): Promise<() => void>;
   subscribeLlmCredentialsRequired(listener: () => void): Promise<() => void>;
-  hideCurrentWindow(): Promise<void>;
+  hideCurrentWindow(sessionId?: number | null): Promise<void>;
   startWorkMode(): Promise<WorkSessionSnapshot>;
   loadWorkModeSession(): Promise<WorkSessionSnapshot | null>;
   checkpointWorkModeSession(session: WorkSessionSnapshot): Promise<WorkSessionSnapshot>;
@@ -539,8 +539,8 @@ function tauriClient(): TaskClient {
       const { listen } = await import("@tauri-apps/api/event");
       return listen("todou://llm-credentials-required", listener);
     },
-    async hideCurrentWindow() {
-      await invoke<void>("hide_quick_entry");
+    async hideCurrentWindow(sessionId) {
+      await invoke<void>("hide_quick_entry", { sessionId });
     },
     startWorkMode: () => invokeResult<WorkSessionSnapshot>("start_work_mode"),
     loadWorkModeSession: () => invokeResult<WorkSessionSnapshot | null>("load_work_mode_session"),
