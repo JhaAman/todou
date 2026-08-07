@@ -1,21 +1,18 @@
 use crate::{
-    domain::{Bucket, Task, TaskFilter},
+    domain::{Bucket, TaskFilter},
     error::{AppError, AppResult},
     service::TaskService,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 #[cfg(target_os = "macos")]
 mod native_macos;
 
 const WORK_MODE_METADATA_KEY: &str = "work_mode_state_v2";
-const WORK_MODE_EVENT: &str = "todou://work-mode-session-changed";
-const WORK_MODE_VERSION: u32 = 1;
+const WORK_MODE_EVENT: &str = "todou://work-mode-active-changed";
 const WORK_WINDOW_GEOMETRY_VERSION: u32 = 1;
-const DEFAULT_DURATION_MINUTES: u64 = 30;
 const WORK_WINDOW_HEIGHT_POINTS: u32 = 72;
 const WORK_WINDOW_MIN_WIDTH_POINTS: u32 = 320;
 const WORK_WINDOW_DEFAULT_WIDTH_POINTS: u32 = 500;
@@ -24,26 +21,6 @@ const WORK_WINDOW_MARGIN_POINTS: u32 = 12;
 const WORK_WINDOW_SNAP_THRESHOLD_POINTS: u32 = 24;
 
 static WORK_MODE_STATE_LOCK: Mutex<()> = Mutex::new(());
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkSessionStatus {
-    Running,
-    ManualPaused,
-    IdlePaused,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkSessionSnapshot {
-    pub version: u32,
-    pub task_id: String,
-    pub duration_ms: u64,
-    pub remaining_ms: i64,
-    pub status: WorkSessionStatus,
-    pub checkpoint_wall_time_ms: u64,
-    pub zero_notified: bool,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -62,18 +39,13 @@ struct WorkArea {
     height: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SystemActivitySample {
-    pub idle_ms: Option<u64>,
-    pub awake_time_ms: Option<u64>,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct PersistedWorkModeState {
     #[serde(default)]
-    session: Option<WorkSessionSnapshot>,
+    active: bool,
+    #[serde(default, rename = "session", skip_serializing)]
+    legacy_session: Option<serde_json::Value>,
     #[serde(default)]
     geometry: Option<WorkWindowGeometry>,
     #[serde(default)]
@@ -81,13 +53,10 @@ struct PersistedWorkModeState {
 }
 
 #[tauri::command]
-pub fn start_work_mode(
-    app: AppHandle,
-    service: State<'_, TaskService>,
-) -> AppResult<WorkSessionSnapshot> {
-    let task = first_in_progress_task(service.inner())?
-        .ok_or_else(|| AppError::invalid_input("Move a task to In Progress first"))?;
-    let snapshot = new_session(&task)?;
+pub fn start_work_mode(app: AppHandle, service: State<'_, TaskService>) -> AppResult<()> {
+    if !has_in_progress_task(service.inner())? {
+        return Err(AppError::invalid_input("Move a task to In Progress first"));
+    }
     let _guard = WORK_MODE_STATE_LOCK.lock();
     let previous = match read_persisted_state(service.inner()) {
         Ok(state) => state,
@@ -97,16 +66,17 @@ pub fn start_work_mode(
         }
     };
     let mut next = previous.clone();
-    next.session = Some(snapshot.clone());
+    next.active = true;
 
     configure_work_window(&app, next.geometry)?;
     write_persisted_state(service.inner(), &next)?;
-    if let Err(error) = enter_work_mode(&app, &snapshot) {
+    if let Err(error) = enter_work_mode(&app) {
         let _ = write_persisted_state(service.inner(), &previous);
+        let _ = emit_active(&app, false);
         let _ = leave_work_mode(&app);
         return Err(error);
     }
-    Ok(snapshot)
+    Ok(())
 }
 
 #[tauri::command]
@@ -123,88 +93,43 @@ pub fn stop_work_mode(app: AppHandle, service: State<'_, TaskService>) -> AppRes
         if let Ok(geometry) = capture_work_window_geometry(&app) {
             state.geometry = Some(geometry);
         }
-        state.session = None;
+        state.active = false;
         write_persisted_state(service.inner(), &state)?;
     }
-    let notification_result = emit_session(&app, None);
+    let notification_result = emit_active(&app, false);
     let window_result = leave_work_mode(&app);
     notification_result.and(window_result)
 }
 
 #[tauri::command]
-pub fn load_work_mode_session(
-    service: State<'_, TaskService>,
-) -> AppResult<Option<WorkSessionSnapshot>> {
+pub fn load_work_mode_active(service: State<'_, TaskService>) -> AppResult<bool> {
     let _guard = WORK_MODE_STATE_LOCK.lock();
-    Ok(read_persisted_state(service.inner())?.session)
-}
-
-#[tauri::command]
-pub fn checkpoint_work_mode_session(
-    app: AppHandle,
-    service: State<'_, TaskService>,
-    mut session: WorkSessionSnapshot,
-) -> AppResult<WorkSessionSnapshot> {
-    validate_session(&session)?;
-    let current = first_in_progress_task(service.inner())?
-        .ok_or_else(|| AppError::invalid_input("No In Progress task is available"))?;
-    if current.id != session.task_id {
-        return Err(AppError::invalid_input(
-            "Only the first In Progress task can be checkpointed",
-        ));
-    }
-
-    session.checkpoint_wall_time_ms = wall_time_millis()?;
-    let _guard = WORK_MODE_STATE_LOCK.lock();
-    let mut state = read_persisted_state(service.inner())?;
-    validate_checkpoint_target(state.session.as_ref(), &session)?;
-    state.session = Some(session.clone());
-    write_persisted_state(service.inner(), &state)?;
-    deactivate_after_interaction(&app)?;
-    Ok(session)
-}
-
-#[tauri::command]
-pub fn get_system_activity_sample() -> AppResult<SystemActivitySample> {
-    Ok(SystemActivitySample {
-        idle_ms: system_idle_millis(),
-        awake_time_ms: system_awake_time_millis(),
-    })
+    Ok(read_persisted_state(service.inner())?.active)
 }
 
 pub fn restore_active_work_mode(app: &AppHandle, service: &TaskService) -> AppResult<bool> {
     let _guard = WORK_MODE_STATE_LOCK.lock();
     let mut state = read_persisted_state(service)?;
-    let Some(persisted) = state.session.clone() else {
+    if !state.active {
         return Ok(false);
-    };
-    validate_session(&persisted)?;
+    }
 
-    let Some(current) = first_in_progress_task(service)? else {
-        state.session = None;
+    if !has_in_progress_task(service)? {
+        state.active = false;
         write_persisted_state(service, &state)?;
-        emit_session(app, None)?;
+        emit_active(app, false)?;
         return Ok(false);
-    };
-    let snapshot = if current.id == persisted.task_id {
-        WorkSessionSnapshot {
-            checkpoint_wall_time_ms: wall_time_millis()?,
-            ..persisted
-        }
-    } else {
-        new_session(&current)?
-    };
-    state.session = Some(snapshot.clone());
+    }
 
     let restore_result = configure_work_window(app, state.geometry)
         .and_then(|_| write_persisted_state(service, &state))
-        .and_then(|_| enter_work_mode(app, &snapshot));
+        .and_then(|_| enter_work_mode(app));
     if let Err(error) = restore_result {
-        state.session = None;
+        state.active = false;
         if let Err(cleanup_error) = write_persisted_state(service, &state) {
             tracing::warn!(%cleanup_error, "could not clear a failed work-mode restore");
         }
-        let _ = emit_session(app, None);
+        let _ = emit_active(app, false);
         let _ = leave_work_mode(app);
         return Err(error);
     }
@@ -214,10 +139,9 @@ pub fn restore_active_work_mode(app: &AppHandle, service: &TaskService) -> AppRe
 pub fn show_active_work_mode(app: &AppHandle, service: &TaskService) -> AppResult<bool> {
     let _guard = WORK_MODE_STATE_LOCK.lock();
     let state = read_persisted_state(service)?;
-    let Some(snapshot) = state.session else {
+    if !state.active {
         return Ok(false);
-    };
-    validate_session(&snapshot)?;
+    }
     configure_work_window(app, state.geometry)?;
     reveal_work_mode(app)?;
     Ok(true)
@@ -226,7 +150,7 @@ pub fn show_active_work_mode(app: &AppHandle, service: &TaskService) -> AppResul
 pub(crate) fn should_intercept_quit(app: &AppHandle, service: &TaskService) -> bool {
     let persisted_active = {
         let _guard = WORK_MODE_STATE_LOCK.lock();
-        read_persisted_state(service).is_ok_and(|state| state.session.is_some())
+        read_persisted_state(service).is_ok_and(|state| state.active)
     };
     persisted_active
         || app
@@ -374,70 +298,15 @@ fn distance_to_interval(value: i128, min: i128, max: i128) -> u128 {
     }
 }
 
-fn new_session(task: &Task) -> AppResult<WorkSessionSnapshot> {
-    let duration_ms = task
-        .estimate_minutes
-        .map(u64::from)
-        .unwrap_or(DEFAULT_DURATION_MINUTES)
-        .saturating_mul(60_000);
-    let remaining_ms =
-        i64::try_from(duration_ms).map_err(|_| AppError::storage("task duration is too large"))?;
-    Ok(WorkSessionSnapshot {
-        version: WORK_MODE_VERSION,
-        task_id: task.id.clone(),
-        duration_ms,
-        remaining_ms,
-        status: WorkSessionStatus::Running,
-        checkpoint_wall_time_ms: wall_time_millis()?,
-        zero_notified: false,
-    })
-}
-
-fn first_in_progress_task(service: &TaskService) -> AppResult<Option<Task>> {
-    Ok(service
+fn has_in_progress_task(service: &TaskService) -> AppResult<bool> {
+    Ok(!service
         .list_tasks(TaskFilter {
             bucket: Some(Bucket::InProgress),
             completed: Some(false),
             ..TaskFilter::default()
         })?
         .result
-        .into_iter()
-        .next())
-}
-
-fn validate_session(session: &WorkSessionSnapshot) -> AppResult<()> {
-    if session.version != WORK_MODE_VERSION {
-        return Err(AppError::invalid_input(format!(
-            "Unsupported work-mode session version {}",
-            session.version
-        )));
-    }
-    if session.task_id.trim().is_empty() {
-        return Err(AppError::invalid_input(
-            "Work-mode session taskId cannot be empty",
-        ));
-    }
-    if session.duration_ms == 0 || session.duration_ms > 24 * 60 * 60 * 1_000 {
-        return Err(AppError::invalid_input(
-            "Work-mode session durationMs must be between 1 and 86400000",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_checkpoint_target(
-    persisted: Option<&WorkSessionSnapshot>,
-    checkpoint: &WorkSessionSnapshot,
-) -> AppResult<()> {
-    match persisted {
-        Some(active) if active.task_id == checkpoint.task_id => Ok(()),
-        Some(_) => Err(AppError::invalid_input(
-            "The active work-mode task changed; reload the session",
-        )),
-        None => Err(AppError::invalid_input(
-            "Work mode is no longer active; discard this checkpoint",
-        )),
-    }
+        .is_empty())
 }
 
 fn read_persisted_state(service: &TaskService) -> AppResult<PersistedWorkModeState> {
@@ -445,7 +314,7 @@ fn read_persisted_state(service: &TaskService) -> AppResult<PersistedWorkModeSta
         .get_local_metadata_value(WORK_MODE_METADATA_KEY)?
         .map(|value| {
             serde_json::from_value(value)
-                .map_err(|_| AppError::storage("work-mode session metadata is corrupt"))
+                .map_err(|_| AppError::storage("work-mode metadata is corrupt"))
         })
         .transpose()
         .map(Option::unwrap_or_default)
@@ -453,7 +322,7 @@ fn read_persisted_state(service: &TaskService) -> AppResult<PersistedWorkModeSta
 }
 
 fn write_persisted_state(service: &TaskService, state: &PersistedWorkModeState) -> AppResult<()> {
-    if state.session.is_none() && state.geometry.is_none() {
+    if !state.active && state.geometry.is_none() {
         return service.set_local_metadata_value(WORK_MODE_METADATA_KEY, None);
     }
     let mut state = state.clone();
@@ -465,6 +334,9 @@ fn write_persisted_state(service: &TaskService, state: &PersistedWorkModeState) 
 }
 
 fn normalize_persisted_state(mut state: PersistedWorkModeState) -> PersistedWorkModeState {
+    if state.legacy_session.take().is_some() {
+        state.active = true;
+    }
     if state.geometry_version != WORK_WINDOW_GEOMETRY_VERSION {
         state.geometry = None;
         state.geometry_version = WORK_WINDOW_GEOMETRY_VERSION;
@@ -615,14 +487,14 @@ fn default_work_window_geometry(
     }
 }
 
-fn enter_work_mode(app: &AppHandle, snapshot: &WorkSessionSnapshot) -> AppResult<()> {
-    emit_session(app, Some(snapshot))?;
+fn enter_work_mode(app: &AppHandle) -> AppResult<()> {
+    emit_active(app, true)?;
     reveal_work_mode(app)
 }
 
-fn emit_session(app: &AppHandle, snapshot: Option<&WorkSessionSnapshot>) -> AppResult<()> {
+fn emit_active(app: &AppHandle, active: bool) -> AppResult<()> {
     work_window(app)?
-        .emit(WORK_MODE_EVENT, snapshot.cloned())
+        .emit(WORK_MODE_EVENT, active)
         .map_err(AppError::storage)
 }
 
@@ -706,14 +578,6 @@ fn main_window(app: &AppHandle) -> AppResult<WebviewWindow> {
         .ok_or_else(|| AppError::storage("main window is unavailable"))
 }
 
-fn wall_time_millis() -> AppResult<u64> {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(AppError::storage)?
-        .as_millis();
-    u64::try_from(millis).map_err(|_| AppError::storage("system time is out of range"))
-}
-
 fn intersection_area(geometry: WorkWindowGeometry, work_area: WorkArea) -> u64 {
     let left = i64::from(geometry.x).max(i64::from(work_area.x));
     let top = i64::from(geometry.y).max(i64::from(work_area.y));
@@ -731,58 +595,6 @@ fn clamp_i64(value: i64, min: i64, max: i64) -> i32 {
 
 fn saturating_i32(value: i64) -> i32 {
     value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
-}
-
-#[cfg(target_os = "macos")]
-fn system_idle_millis() -> Option<u64> {
-    const COMBINED_SESSION_STATE: i32 = 0;
-    const ANY_INPUT_EVENT: u32 = u32::MAX;
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
-    }
-
-    let seconds =
-        unsafe { CGEventSourceSecondsSinceLastEventType(COMBINED_SESSION_STATE, ANY_INPUT_EVENT) };
-    if !seconds.is_finite() || seconds < 0.0 {
-        return None;
-    }
-    Some((seconds * 1_000.0).round().clamp(0.0, u64::MAX as f64) as u64)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn system_idle_millis() -> Option<u64> {
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn system_awake_time_millis() -> Option<u64> {
-    #[repr(C)]
-    struct MachTimebaseInfo {
-        numer: u32,
-        denom: u32,
-    }
-
-    #[link(name = "System")]
-    unsafe extern "C" {
-        fn mach_absolute_time() -> u64;
-        fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
-    }
-
-    let absolute = unsafe { mach_absolute_time() };
-    let mut timebase = MachTimebaseInfo { numer: 0, denom: 0 };
-    if unsafe { mach_timebase_info(&mut timebase) } != 0 || timebase.denom == 0 {
-        return None;
-    }
-    let awake_nanos =
-        u128::from(absolute) * u128::from(timebase.numer) / u128::from(timebase.denom);
-    u64::try_from(awake_nanos / 1_000_000).ok()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn system_awake_time_millis() -> Option<u64> {
-    None
 }
 
 #[cfg(target_os = "macos")]
@@ -806,10 +618,9 @@ fn deactivate_todou(_app: &AppHandle) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_geometry_to_work_area, first_in_progress_task, new_session,
-        normalize_persisted_state, select_work_area_for_geometry, snap_geometry_to_corners,
-        validate_checkpoint_target, PersistedWorkModeState, WorkArea, WorkSessionSnapshot,
-        WorkSessionStatus, WorkWindowGeometry, WORK_MODE_VERSION, WORK_WINDOW_GEOMETRY_VERSION,
+        clamp_geometry_to_work_area, has_in_progress_task, normalize_persisted_state,
+        select_work_area_for_geometry, snap_geometry_to_corners, PersistedWorkModeState, WorkArea,
+        WorkWindowGeometry, WORK_WINDOW_GEOMETRY_VERSION,
     };
     use crate::{
         domain::{Area, Bucket, CreateTaskInput, Priority},
@@ -858,18 +669,6 @@ mod tests {
             y,
             width,
             height,
-        }
-    }
-
-    fn session(task_id: &str) -> WorkSessionSnapshot {
-        WorkSessionSnapshot {
-            version: WORK_MODE_VERSION,
-            task_id: task_id.into(),
-            duration_ms: 30 * 60_000,
-            remaining_ms: 30 * 60_000,
-            status: WorkSessionStatus::Running,
-            checkpoint_wall_time_ms: 1,
-            zero_notified: false,
         }
     }
 
@@ -982,28 +781,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_checkpoint_after_work_mode_stops() {
-        assert!(validate_checkpoint_target(None, &session("task-1")).is_err());
-    }
-
-    #[test]
-    fn rejects_a_checkpoint_for_a_replaced_active_task() {
-        assert!(validate_checkpoint_target(Some(&session("task-2")), &session("task-1")).is_err());
-    }
-
-    #[test]
-    fn accepts_a_checkpoint_for_the_active_task() {
-        assert!(validate_checkpoint_target(Some(&session("task-1")), &session("task-1")).is_ok());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn reads_permissionless_idle_and_awake_clocks() {
-        assert!(super::system_idle_millis().is_some());
-        assert!(super::system_awake_time_millis().is_some());
-    }
-
-    #[test]
     fn restores_to_the_nearest_monitor_when_none_overlap() {
         let areas = [
             work_area(0, 0, 1_920, 1_057),
@@ -1026,9 +803,9 @@ mod tests {
 
     #[test]
     fn drops_only_legacy_geometry_coordinates() {
-        let session = session("task-1");
         let state = normalize_persisted_state(PersistedWorkModeState {
-            session: Some(session.clone()),
+            active: true,
+            legacy_session: None,
             geometry: Some(WorkWindowGeometry {
                 x: 10,
                 y: 20,
@@ -1038,62 +815,45 @@ mod tests {
             geometry_version: 0,
         });
 
-        assert_eq!(state.session, Some(session));
+        assert!(state.active);
         assert_eq!(state.geometry, None);
         assert_eq!(state.geometry_version, WORK_WINDOW_GEOMETRY_VERSION);
     }
 
     #[test]
-    fn selects_the_first_in_progress_task_in_service_order() {
+    fn restores_legacy_session_as_active() {
+        let state: PersistedWorkModeState = serde_json::from_value(serde_json::json!({
+            "session": { "taskId": "task-1" },
+            "geometryVersion": WORK_WINDOW_GEOMETRY_VERSION,
+        }))
+        .unwrap();
+
+        assert!(normalize_persisted_state(state).active);
+    }
+
+    #[test]
+    fn detects_only_active_in_progress_tasks() {
         let service = service();
-        service
-            .create_task(task_input(
-                "Low priority",
-                Bucket::InProgress,
-                Priority::Low,
-                Some(10),
-            ))
-            .unwrap();
-        let high = service
-            .create_task(task_input(
-                "High priority",
-                Bucket::InProgress,
-                Priority::High,
-                Some(20),
-            ))
-            .unwrap()
-            .result;
+        assert!(!has_in_progress_task(&service).unwrap());
+
         service
             .create_task(task_input(
                 "Not in progress",
                 Bucket::Today,
                 Priority::High,
-                Some(5),
+                Some(10),
             ))
             .unwrap();
+        assert!(!has_in_progress_task(&service).unwrap());
 
-        assert_eq!(
-            first_in_progress_task(&service).unwrap().unwrap().id,
-            high.id
-        );
-    }
-
-    #[test]
-    fn new_session_uses_thirty_minutes_without_an_estimate() {
-        let service = service();
-        let task = service
+        service
             .create_task(task_input(
-                "Unestimated",
+                "In progress",
                 Bucket::InProgress,
                 Priority::High,
-                None,
+                Some(20),
             ))
-            .unwrap()
-            .result;
-
-        let session = new_session(&task).unwrap();
-
-        assert_eq!(session.duration_ms, 30 * 60_000);
-        assert_eq!(session.remaining_ms, 30 * 60_000);
+            .unwrap();
+        assert!(has_in_progress_task(&service).unwrap());
     }
 }

@@ -1378,7 +1378,7 @@ kbd {
   display: grid;
   width: 100%;
   height: 100%;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 7px 9px 7px 12px;
@@ -1424,18 +1424,6 @@ kbd {
   white-space: nowrap;
 }
 
-.work-mode-window time {
-  min-width: 56px;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  font-size: 17px;
-  font-weight: 610;
-  letter-spacing: -.04em;
-  text-align: right;
-}
-
-.work-mode-window time.is-overtime { color: var(--area-personal-fg); }
-
 .work-mode-controls {
   display: flex;
   flex: none;
@@ -1473,17 +1461,6 @@ kbd {
   border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
   color: var(--danger-fg);
   background: color-mix(in srgb, var(--danger) 9%, var(--surface-raised));
-}
-
-.work-mode-window.is-paused time { color: var(--text-secondary); }
-.work-mode-window.is-idle {
-  border-color: color-mix(in srgb, var(--danger) 68%, var(--border-strong));
-  animation: work-mode-idle-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes work-mode-idle-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 10%, transparent), inset 0 1px rgb(255 255 255 / 4%); }
-  50% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--danger) 34%, transparent), inset 0 1px rgb(255 255 255 / 4%); }
 }
 
 .work-mode-window.is-loading,

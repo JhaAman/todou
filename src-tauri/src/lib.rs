@@ -126,9 +126,7 @@ pub fn run() {
             commands::dev_build_and_install_app,
             work_mode::start_work_mode,
             work_mode::stop_work_mode,
-            work_mode::load_work_mode_session,
-            work_mode::checkpoint_work_mode_session,
-            work_mode::get_system_activity_sample,
+            work_mode::load_work_mode_active,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Todou");
