@@ -35,7 +35,7 @@ uuid = { version = "=1.24.0", features = ["serde", "v4"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSEvent", "NSPanel", "NSResponder", "NSScreen", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSEvent", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

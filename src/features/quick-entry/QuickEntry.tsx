@@ -35,6 +35,7 @@ export function QuickEntry() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const sessionIdRef = useRef<number | null>(null);
   const parsed = useMemo(() => parseNaturalLanguage(value), [value]);
   const finalPriority = parsed.fields.priority ?? priority;
   const finalArea = parsed.fields.area ?? area;
@@ -54,7 +55,8 @@ export function QuickEntry() {
     let disposed = false;
     let cleanup: (() => void)[] = [];
     void import("@tauri-apps/api/event").then(async ({ listen }) => {
-      const unlistenShown = await listen("todou://quick-entry-shown", () => {
+      const unlistenShown = await listen<{ sessionId: number }>("todou://quick-entry-shown", (event) => {
+        sessionIdRef.current = event.payload.sessionId;
         preferences.current = loadPreferences();
         setValue("");
         setPriority("low");
@@ -81,13 +83,14 @@ export function QuickEntry() {
     };
   }, []);
 
-  const close = async () => {
+  const close = async (expectedSessionId = sessionIdRef.current) => {
+    if (expectedSessionId !== sessionIdRef.current) return;
     setValue("");
     setPriority("low");
     setBucket("inbox");
     setDueDate(null);
     setSaved(false);
-    if (isTauriRuntime()) await taskClient.hideCurrentWindow();
+    if (isTauriRuntime()) await taskClient.hideCurrentWindow(expectedSessionId);
   };
 
   const save = async () => {
@@ -106,7 +109,8 @@ export function QuickEntry() {
       savePreferences(preferences.current);
       setSaved(true);
       if (isTauriRuntime()) {
-        window.setTimeout(() => void close(), 120);
+        const savedSessionId = sessionIdRef.current;
+        window.setTimeout(() => void close(savedSessionId), 120);
       } else {
         setValue("");
         window.setTimeout(() => setSaved(false), 1_500);

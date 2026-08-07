@@ -401,8 +401,8 @@ pub fn show_quick_entry(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn hide_quick_entry(app: AppHandle) -> AppResult<()> {
-    lifecycle::hide_quick_entry(&app)
+pub fn hide_quick_entry(app: AppHandle, session_id: Option<u64>) -> AppResult<()> {
+    lifecycle::dismiss_quick_entry(&app, session_id, true)
 }
 
 #[tauri::command]
