@@ -21,9 +21,8 @@
 - Manual dedupe scans wait behind automatic drains, enqueue only missing active-task jobs, and replace stale suggestions for the same task pair.
 - Tauri commands may be bare values or `Revisioned<T>` during internal refactors; the frontend compatibility unwrapping currently accepts both. The Unix socket always returns `{id, ok, result, revision}`.
 - On macOS, keep the main window's `dragDropEnabled` false so WKWebView receives Todou's HTML5 task-drag events.
-- Work Mode uses the hidden `work-mode` webview plus device-local `work_mode_state_v2` metadata. Rust owns window/focus/idle integration and persists window geometry in logical macOS points; the renderer owns countdown reconciliation and checkpoints.
-- Work Mode always targets the first task in canonical In Progress order. Start a new native session when that task changes; never checkpoint a different task ID over the active session.
-- Work Mode countdowns use the macOS awake-time clock, not wall time, so sleep is never charged; global idle comes from CoreGraphics and does not require Accessibility permission.
+- Work Mode uses the hidden `work-mode` webview plus device-local `work_mode_state_v2` metadata. Rust owns active-state persistence and window/focus integration, including geometry in logical macOS points.
+- Work Mode shows all active In Progress tasks in canonical order, up to the three-task limit.
 
 ## Commands
 

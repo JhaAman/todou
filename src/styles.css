@@ -26,10 +26,10 @@
   --shadow: #00000073;
   --text-strong: var(--text);
   --text-meta: color-mix(in srgb, var(--text-secondary) 90%, var(--text-muted));
-  --area-work-mark: color-mix(in srgb, var(--blue) 80%, var(--text));
-  --area-personal-mark: color-mix(in srgb, var(--orange) 80%, var(--text));
-  --area-work-fg: color-mix(in srgb, var(--blue) 58%, var(--text));
-  --area-personal-fg: color-mix(in srgb, var(--orange) 58%, var(--text));
+  --area-work-mark: #41d9ff;
+  --area-personal-mark: #ff5bd8;
+  --area-work-fg: color-mix(in srgb, var(--area-work-mark) 50%, var(--text));
+  --area-personal-fg: color-mix(in srgb, var(--area-personal-mark) 50%, var(--text));
   --accent-fg: color-mix(in srgb, var(--accent) 60%, var(--text));
   --danger-fg: color-mix(in srgb, var(--danger) 45%, var(--text));
   --focus-ring: #ffffff;
@@ -1378,7 +1378,7 @@ kbd {
   display: grid;
   width: 100%;
   height: 100%;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 7px 9px 7px 12px;
@@ -1392,14 +1392,13 @@ kbd {
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.work-mode-task {
-  display: flex;
+.work-mode-task-list {
+  display: grid;
   min-width: 0;
-  flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
-.work-mode-task > span {
+.work-mode-task-list > span {
   overflow: hidden;
   color: var(--text-muted);
   font-size: 7px;
@@ -1411,7 +1410,24 @@ kbd {
   white-space: nowrap;
 }
 
-.work-mode-task > span.is-error { color: var(--danger-fg); }
+.work-mode-task-list > span.is-error { color: var(--danger-fg); }
+
+.work-mode-task-list ul {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.work-mode-task {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
 
 .work-mode-task > strong {
   overflow: hidden;
@@ -1424,18 +1440,6 @@ kbd {
   white-space: nowrap;
 }
 
-.work-mode-window time {
-  min-width: 56px;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  font-size: 17px;
-  font-weight: 610;
-  letter-spacing: -.04em;
-  text-align: right;
-}
-
-.work-mode-window time.is-overtime { color: var(--area-personal-fg); }
-
 .work-mode-controls {
   display: flex;
   flex: none;
@@ -1443,6 +1447,7 @@ kbd {
   gap: 4px;
 }
 
+.work-mode-task button,
 .work-mode-controls button {
   display: grid;
   width: 26px;
@@ -1455,15 +1460,18 @@ kbd {
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease, transform 80ms ease;
 }
 
+.work-mode-task button:hover:not(:disabled),
 .work-mode-controls button:hover:not(:disabled) {
   border-color: var(--border-strong);
   color: var(--text);
   background: var(--surface-hover);
 }
 
+.work-mode-task button:active:not(:disabled),
 .work-mode-controls button:active:not(:disabled) { transform: scale(.95); }
+.work-mode-task button:disabled,
 .work-mode-controls button:disabled { opacity: .45; }
-.work-mode-controls button.is-done {
+.work-mode-task button.is-done {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
   color: var(--on-accent);
   background: linear-gradient(180deg, var(--accent-hover), var(--accent));
@@ -1473,17 +1481,6 @@ kbd {
   border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
   color: var(--danger-fg);
   background: color-mix(in srgb, var(--danger) 9%, var(--surface-raised));
-}
-
-.work-mode-window.is-paused time { color: var(--text-secondary); }
-.work-mode-window.is-idle {
-  border-color: color-mix(in srgb, var(--danger) 68%, var(--border-strong));
-  animation: work-mode-idle-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes work-mode-idle-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 10%, transparent), inset 0 1px rgb(255 255 255 / 4%); }
-  50% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--danger) 34%, transparent), inset 0 1px rgb(255 255 255 / 4%); }
 }
 
 .work-mode-window.is-loading,
