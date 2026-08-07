@@ -3,12 +3,9 @@ set -euo pipefail
 
 for app in "$HOME/Applications/Todou.app" "/Applications/Todou.app"; do
   bridge="$app/Contents/Resources/todou-mcp"
-  executable="$app/Contents/MacOS/todou"
 
   if [[ -x "$bridge" ]]; then
-    if [[ -x "$executable" ]]; then
-      export TODOU_APP_PATH="$executable"
-    fi
+    export TODOU_APP_BUNDLE_PATH="$app"
     exec "$bridge"
   fi
 done

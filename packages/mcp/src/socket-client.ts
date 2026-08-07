@@ -41,20 +41,34 @@ function defaultSocketPath(): string {
   );
 }
 
-function launchTodou(): void {
-  const explicitPath = process.env.TODOU_APP_PATH;
-  const child = explicitPath
-    ? spawn(explicitPath, ["--background"], {
-        detached: true,
-        stdio: "ignore",
-      })
-    : spawn(
-        "/usr/bin/open",
-        ["-gj", "-a", "Todou", "--args", "--background"],
-        { detached: true, stdio: "ignore" },
-      );
+function configuredAppBundlePath(): string | undefined {
+  const configuredPath =
+    process.env.TODOU_APP_BUNDLE_PATH ?? process.env.TODOU_APP_PATH;
+  if (!configuredPath) return undefined;
+  if (/\.app$/i.test(configuredPath)) return configuredPath;
+  return configuredPath.match(/^(.*\.app)\/Contents\/MacOS\/[^/]+$/i)?.[1];
+}
 
-  child.once("error", () => undefined);
+export function launchTodou(): void {
+  const appBundle = configuredAppBundlePath();
+  if (!appBundle) {
+    console.error(
+      "Todou could not be launched: configure TODOU_APP_BUNDLE_PATH with the installed .app path",
+    );
+    return;
+  }
+  const child = spawn(
+    "/usr/bin/open",
+    ["-gj", appBundle, "--args", "--background"],
+    { detached: true, stdio: "ignore" },
+  );
+
+  child.once("error", (error) => {
+    console.error(`Todou launch failed: ${error.message}`);
+  });
+  child.once("exit", (code) => {
+    if (code) console.error(`Todou launch failed: open exited with ${code}`);
+  });
   child.unref();
 }
 
