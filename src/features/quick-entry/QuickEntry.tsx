@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { parseNaturalLanguage } from "../../lib/naturalLanguage";
-import { localDateString, newTaskBucket } from "../../lib/newTaskSchedule";
+import { localDateString, scheduledNewTaskBucket } from "../../lib/newTaskSchedule";
 import { loadPreferences, savePreferences } from "../../lib/preferences";
 import { isTauriRuntime, taskClient } from "../../lib/taskClient";
 import { applyTheme } from "../../lib/themes";
@@ -40,7 +40,7 @@ export function QuickEntry() {
   const finalPriority = parsed.fields.priority ?? priority;
   const finalArea = parsed.fields.area ?? area;
   const finalDueDate = parsed.fields.dueDate ?? dueDate;
-  const finalBucket = newTaskBucket(parsed.fields.bucket ?? bucket, finalDueDate);
+  const finalBucket = scheduledNewTaskBucket(parsed.fields.bucket ?? bucket, finalDueDate);
 
   const toggleToday = () => {
     const moveToToday = finalBucket === "inbox";

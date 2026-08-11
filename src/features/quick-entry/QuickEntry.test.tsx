@@ -46,4 +46,20 @@ describe("quick entry", () => {
     const today = `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, "0")}-${`${now.getDate()}`.padStart(2, "0")}`;
     expect(saved).toMatchObject({ bucket: "today", dueDate: today });
   });
+
+  it("keeps a future-dated task in Inbox after the Today control was selected", async () => {
+    render(<QuickEntry />);
+    fireEvent.change(screen.getByLabelText("New task"), {
+      target: { value: "Call Jordan" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Today list" }));
+    fireEvent.change(screen.getByLabelText("Due date"), { target: { value: "2099-01-01" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /Add to Inbox/i }));
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    const tasks = JSON.parse(localStorage.getItem("todou.browser.tasks.v1") ?? "[]") as Task[];
+    const saved = tasks.find(({ title }) => title === "Call Jordan");
+    expect(saved).toMatchObject({ bucket: "inbox", dueDate: "2099-01-01" });
+  });
 });

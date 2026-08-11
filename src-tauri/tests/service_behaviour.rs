@@ -538,13 +538,13 @@ fn due_and_move_transitions_preserve_schedule_invariant() {
 }
 
 #[test]
-fn new_task_destination_comes_from_its_saved_schedule() {
+fn new_task_destination_respects_an_explicit_today_bucket() {
     let service = service();
 
     let mut unscheduled = input("Unscheduled from Today");
     unscheduled.bucket = Bucket::Today;
     let unscheduled = service.create_task(unscheduled).unwrap().result;
-    assert_eq!(unscheduled.bucket, Bucket::Inbox);
+    assert_eq!(unscheduled.bucket, Bucket::Today);
     assert_eq!(unscheduled.due_date, None);
 
     for due_date in ["2026-07-27", "2026-08-14"] {
@@ -552,7 +552,7 @@ fn new_task_destination_comes_from_its_saved_schedule() {
         future.bucket = Bucket::Today;
         future.due_date = Some(due_date.into());
         let future = service.create_task(future).unwrap().result;
-        assert_eq!(future.bucket, Bucket::Inbox);
+        assert_eq!(future.bucket, Bucket::Today);
         assert_eq!(future.due_date.as_deref(), Some(due_date));
     }
 
