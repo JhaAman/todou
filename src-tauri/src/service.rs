@@ -350,7 +350,9 @@ impl TaskService {
             }
         }
 
-        if task.bucket != previous_bucket || task.priority != previous_priority {
+        if task.bucket != previous_bucket
+            || (task.priority != previous_priority && task.bucket != Bucket::InProgress)
+        {
             task.order_key = next_tier_key(
                 &transaction,
                 task.bucket,
@@ -449,11 +451,33 @@ impl TaskService {
         let mut task = require_active_task(&transaction, id)?;
         let tier = load_active_tier(&transaction, task.bucket, task.priority, Some(id))?;
         let (lower, upper) = validate_anchors(&tier, before_id, after_id)?;
-        task.order_key = order_key::between(
-            lower.map(|value| value.order_key.as_str()),
-            upper.map(|value| value.order_key.as_str()),
-        )?;
+        let lower_key = lower.map(|value| value.order_key.clone());
+        let mut upper_key = upper.map(|value| value.order_key.clone());
+        let mut shifted_upper = None;
+        if lower_key.is_some() && lower_key == upper_key {
+            let mut shifted = upper
+                .cloned()
+                .expect("equal reorder bounds include an upper task");
+            let upper_index = tier
+                .iter()
+                .position(|candidate| candidate.id == shifted.id)
+                .expect("validated upper reorder anchor belongs to the ordering scope");
+            shifted.order_key = order_key::between(
+                lower_key.as_deref(),
+                tier.get(upper_index + 1)
+                    .map(|candidate| candidate.order_key.as_str()),
+            )?;
+            upper_key = Some(shifted.order_key.clone());
+            shifted_upper = Some(shifted);
+        }
+        task.order_key = order_key::between(lower_key.as_deref(), upper_key.as_deref())?;
         let stamp = next_stamp(&transaction, now_ms)?;
+        if let Some(mut shifted) = shifted_upper {
+            shifted.clocks.order = stamp.clone();
+            shifted.updated_at = now.clone();
+            update_task_row(&transaction, &shifted)?;
+            enqueue_registers(&transaction, &shifted, &["order"], &now)?;
+        }
         task.clocks.order = stamp;
         task.updated_at = now.clone();
         update_task_row(&transaction, &task)?;
@@ -2337,7 +2361,9 @@ fn apply_merged_draft(
         task.estimate_minutes = draft.estimate_minutes;
         changed.insert("estimate");
     }
-    if task.bucket != previous_bucket || task.priority != previous_priority {
+    if task.bucket != previous_bucket
+        || (task.priority != previous_priority && task.bucket != Bucket::InProgress)
+    {
         task.order_key = next_tier_key(
             transaction,
             task.bucket,
@@ -2420,13 +2446,15 @@ fn next_tier_key(
     priority: Priority,
     exclude_id: Option<&str>,
 ) -> AppResult<String> {
+    let priority = (bucket != Bucket::InProgress).then(|| priority.as_str());
     let last = connection
         .query_row(
             "SELECT order_key FROM tasks
-             WHERE bucket = ?1 AND priority = ?2 AND completed_at IS NULL AND deleted_at IS NULL
+             WHERE bucket = ?1 AND (?2 IS NULL OR priority = ?2)
+               AND completed_at IS NULL AND deleted_at IS NULL
                AND (?3 IS NULL OR id != ?3)
              ORDER BY order_key COLLATE BINARY DESC, id DESC LIMIT 1",
-            params![bucket.as_str(), priority.as_str(), exclude_id],
+            params![bucket.as_str(), priority, exclude_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -2482,19 +2510,18 @@ fn load_active_tier(
     priority: Priority,
     exclude_id: Option<&str>,
 ) -> AppResult<Vec<Task>> {
+    let priority = (bucket != Bucket::InProgress).then(|| priority.as_str());
     let mut statement = connection
         .prepare(&format!(
             "SELECT {TASK_COLUMNS} FROM tasks
-             WHERE bucket = ?1 AND priority = ?2 AND completed_at IS NULL AND deleted_at IS NULL
+             WHERE bucket = ?1 AND (?2 IS NULL OR priority = ?2)
+               AND completed_at IS NULL AND deleted_at IS NULL
                AND (?3 IS NULL OR id != ?3)
              ORDER BY order_key COLLATE BINARY, id"
         ))
         .map_err(AppError::from)?;
     let rows = statement
-        .query_map(
-            params![bucket.as_str(), priority.as_str(), exclude_id],
-            row_to_task,
-        )
+        .query_map(params![bucket.as_str(), priority, exclude_id], row_to_task)
         .map_err(AppError::from)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
 }
@@ -2848,7 +2875,13 @@ fn active_cmp(left: &Task, right: &Task) -> Ordering {
     left.bucket
         .sort_rank()
         .cmp(&right.bucket.sort_rank())
-        .then(left.priority.sort_rank().cmp(&right.priority.sort_rank()))
+        .then_with(|| {
+            if left.bucket == Bucket::InProgress {
+                Ordering::Equal
+            } else {
+                left.priority.sort_rank().cmp(&right.priority.sort_rank())
+            }
+        })
         .then_with(|| left.order_key.as_bytes().cmp(right.order_key.as_bytes()))
         .then_with(|| left.id.cmp(&right.id))
 }

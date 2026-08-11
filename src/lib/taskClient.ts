@@ -187,7 +187,12 @@ function writeBrowserTasks(tasks: Task[]): void {
 
 function nextOrderKey(tasks: Task[], bucket: Task["bucket"], priority: Task["priority"]): string {
   const last = tasks
-    .filter((task) => task.bucket === bucket && task.priority === priority && !task.deletedAt && !task.completedAt)
+    .filter((task) => (
+      task.bucket === bucket
+      && (bucket === "in_progress" || task.priority === priority)
+      && !task.deletedAt
+      && !task.completedAt
+    ))
     .sort(compareTasks)
     .at(-1);
   const numeric = Number(last?.orderKey ?? "0");
@@ -260,7 +265,7 @@ function browserClient(): TaskClient {
         updatedAt: new Date().toISOString(),
       };
       if (patch.dueDate && patch.dueDate <= localDateString() && current.bucket === "inbox") next.bucket = "today";
-      if (patch.priority && patch.priority !== current.priority) {
+      if (patch.priority && patch.priority !== current.priority && next.bucket !== "in_progress") {
         next.orderKey = nextOrderKey(tasks, next.bucket, patch.priority);
       }
       writeBrowserTasks(tasks.map((task) => (task.id === id ? next : task)));
@@ -288,7 +293,13 @@ function browserClient(): TaskClient {
       const moving = tasks.find((task) => task.id === id);
       if (!moving) throw new Error("Task not found");
       const tier = tasks
-        .filter((task) => task.bucket === moving.bucket && task.priority === moving.priority && !task.completedAt && !task.deletedAt && task.id !== id)
+        .filter((task) => (
+          task.bucket === moving.bucket
+          && (moving.bucket === "in_progress" || task.priority === moving.priority)
+          && !task.completedAt
+          && !task.deletedAt
+          && task.id !== id
+        ))
         .sort(compareTasks);
       const targetId = beforeId ?? afterId;
       const targetIndex = targetId ? tier.findIndex((task) => task.id === targetId) : tier.length;

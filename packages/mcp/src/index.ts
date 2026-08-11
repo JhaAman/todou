@@ -209,7 +209,7 @@ server.registerTool(
   {
     title: "Reorder a Todou task",
     description:
-      "Place a task between adjacent task IDs in the same bucket and priority tier.",
+      "Place a task between adjacent task IDs in the same ordering group. In Progress uses one manual order regardless of priority.",
     inputSchema: {
       id: taskId,
       beforeId: taskId.optional(),

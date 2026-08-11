@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { tasksForBucket } from "./taskOrdering";
+import type { Task } from "./types";
 
 const { invoke, listen } = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 
@@ -6,10 +8,68 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
 afterEach(() => {
+  localStorage.clear();
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   invoke.mockReset();
   listen.mockReset();
   vi.resetModules();
+});
+
+const browserTaskStoreKey = "todou.browser.tasks.v1";
+const browserTaskSeedKey = "todou.browser.seeded.v1";
+
+function browserTask(overrides: Partial<Task> & Pick<Task, "id" | "title" | "bucket">): Task {
+  return {
+    description: "",
+    priority: "low",
+    area: "work",
+    dueDate: null,
+    estimateMinutes: null,
+    orderKey: "000001",
+    completedAt: null,
+    deletedAt: null,
+    createdAt: "2026-08-11T12:00:00.000Z",
+    updatedAt: "2026-08-11T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function seedBrowserTasks(tasks: Task[]): void {
+  localStorage.setItem(browserTaskSeedKey, "true");
+  localStorage.setItem(browserTaskStoreKey, JSON.stringify(tasks));
+}
+
+describe("browser In Progress ordering", () => {
+  it("keeps manual order after a priority change and module reload", async () => {
+    seedBrowserTasks([
+      browserTask({ id: "first", title: "First", bucket: "in_progress", orderKey: "000001" }),
+      browserTask({ id: "second", title: "Second", bucket: "in_progress", orderKey: "000002" }),
+    ]);
+    const { taskClient } = await import("./taskClient");
+
+    const updated = await taskClient.updateTask("first", { priority: "high" });
+    expect(updated.orderKey).toBe("000001");
+
+    vi.resetModules();
+    const { taskClient: reloadedClient } = await import("./taskClient");
+    const reloaded = tasksForBucket(await reloadedClient.listTasks(), "in_progress");
+    expect(reloaded.map(({ id }) => id)).toEqual(["first", "second"]);
+  });
+
+  it("appends a task moved into In Progress without changing existing keys", async () => {
+    seedBrowserTasks([
+      browserTask({ id: "first", title: "First", bucket: "in_progress", priority: "low", orderKey: "000001" }),
+      browserTask({ id: "second", title: "Second", bucket: "in_progress", priority: "high", orderKey: "000002" }),
+      browserTask({ id: "third", title: "Third", bucket: "inbox", priority: "high", orderKey: "000001" }),
+    ]);
+    const { taskClient } = await import("./taskClient");
+
+    await taskClient.moveTask("third", "in_progress");
+    const tasks = tasksForBucket(await taskClient.listTasks(), "in_progress");
+
+    expect(tasks.map(({ id }) => id)).toEqual(["first", "second", "third"]);
+    expect(tasks.map(({ orderKey }) => orderKey)).toEqual(["000001", "000002", "000003"]);
+  });
 });
 
 describe("sync diagnostics client", () => {

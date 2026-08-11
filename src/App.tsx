@@ -564,7 +564,7 @@ export default function App() {
   const reorderTask = useCallback((movingId: string, targetId: string, edge: "before" | "after") => {
     const anchors = reorderAnchors(controller.tasks, movingId, targetId, edge);
     if (!anchors) {
-      showNotice("Reorder tasks within the same priority group");
+      showNotice("These tasks cannot be reordered together");
       return;
     }
     void controller.reorderTask(movingId, anchors.beforeId, anchors.afterId);
