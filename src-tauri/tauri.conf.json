@@ -60,6 +60,7 @@
         "focus": false,
         "focusable": false,
         "acceptFirstMouse": true,
+        "dragDropEnabled": false,
         "resizable": true,
         "shadow": true
       }

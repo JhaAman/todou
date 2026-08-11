@@ -662,6 +662,225 @@ fn high_priority_is_sorted_first_and_fifo_within_tier() {
     );
 }
 
+fn in_progress_input(title: &str, priority: Priority) -> CreateTaskInput {
+    CreateTaskInput {
+        bucket: Bucket::InProgress,
+        priority,
+        ..input(title)
+    }
+}
+
+fn active_in_progress_ids(service: &TaskService) -> Vec<String> {
+    service
+        .list_tasks(TaskFilter {
+            bucket: Some(Bucket::InProgress),
+            completed: Some(false),
+            ..TaskFilter::default()
+        })
+        .unwrap()
+        .result
+        .into_iter()
+        .map(|task| task.id)
+        .collect()
+}
+
+#[test]
+fn in_progress_creation_appends_across_priority_values() {
+    let service = service();
+    let first = service
+        .create_task(in_progress_input("First", Priority::Low))
+        .unwrap()
+        .result;
+    let second = service
+        .create_task(in_progress_input("Second", Priority::High))
+        .unwrap()
+        .result;
+    let third = service
+        .create_task(in_progress_input("Third", Priority::Low))
+        .unwrap()
+        .result;
+
+    assert_eq!(
+        active_in_progress_ids(&service),
+        vec![first.id, second.id, third.id]
+    );
+}
+
+#[test]
+fn in_progress_priority_changes_do_not_change_manual_order() {
+    let service = service();
+    let first = service
+        .create_task(in_progress_input("First", Priority::Low))
+        .unwrap()
+        .result;
+    let second = service
+        .create_task(in_progress_input("Second", Priority::Low))
+        .unwrap()
+        .result;
+    let previous_key = first.order_key.clone();
+
+    let updated = service
+        .update_task(
+            &first.id,
+            UpdateTaskPatch {
+                priority: Some(Priority::High),
+                ..UpdateTaskPatch::default()
+            },
+        )
+        .unwrap()
+        .result;
+    let priority_mutation = service.next_outbox(100).unwrap().result.pop().unwrap();
+
+    assert_eq!(updated.order_key, previous_key);
+    assert_eq!(priority_mutation.registers.len(), 1);
+    assert!(priority_mutation.registers.contains_key("priority"));
+    assert_eq!(active_in_progress_ids(&service), vec![first.id, second.id]);
+}
+
+#[test]
+fn moving_into_in_progress_appends_without_rekeying_existing_tasks() {
+    let service = service();
+    let first = service
+        .create_task(in_progress_input("First", Priority::Low))
+        .unwrap()
+        .result;
+    let second = service
+        .create_task(in_progress_input("Second", Priority::High))
+        .unwrap()
+        .result;
+    let first_key = first.order_key.clone();
+    let second_key = second.order_key.clone();
+    let mut third = input("Third");
+    third.priority = Priority::High;
+    let third = service.create_task(third).unwrap().result;
+
+    let moved = service
+        .move_task(&third.id, Bucket::InProgress)
+        .unwrap()
+        .result;
+
+    assert_eq!(
+        active_in_progress_ids(&service),
+        vec![first.id.clone(), second.id.clone(), third.id]
+    );
+    assert_eq!(
+        service.get_task(&first.id).unwrap().result.order_key,
+        first_key
+    );
+    assert_eq!(
+        service.get_task(&second.id).unwrap().result.order_key,
+        second_key
+    );
+    assert!(moved.order_key > second_key);
+}
+
+#[test]
+fn in_progress_reorder_across_priorities_survives_restart() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("todou.sqlite3");
+    let expected = {
+        let service = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+        let first = service
+            .create_task(in_progress_input("First", Priority::Low))
+            .unwrap()
+            .result;
+        let second = service
+            .create_task(in_progress_input("Second", Priority::High))
+            .unwrap()
+            .result;
+        let third = service
+            .create_task(in_progress_input("Third", Priority::Low))
+            .unwrap()
+            .result;
+
+        service
+            .reorder_task(&third.id, Some(&first.id), None)
+            .unwrap();
+        vec![third.id, first.id, second.id]
+    };
+
+    let reopened = TaskService::open_with_clock(&path, FixedClock::july_20()).unwrap();
+    assert_eq!(active_in_progress_ids(&reopened), expected);
+}
+
+#[test]
+fn in_progress_reorder_repairs_equal_legacy_keys_without_a_list_rebalance() {
+    let source = service();
+    let mut first_input = in_progress_input("First", Priority::Low);
+    first_input.id = Some("10000000-0000-4000-8000-000000000001".into());
+    let mut second_input = in_progress_input("Second", Priority::High);
+    second_input.id = Some("10000000-0000-4000-8000-000000000002".into());
+    let mut third_input = in_progress_input("Third", Priority::Low);
+    third_input.id = Some("10000000-0000-4000-8000-000000000003".into());
+    let mut first = source.create_task(first_input).unwrap().result;
+    let mut second = source.create_task(second_input).unwrap().result;
+    let mut third = source.create_task(third_input).unwrap().result;
+    first.order_key = "V".into();
+    second.order_key = "V".into();
+    third.order_key = "z".into();
+
+    let target = service();
+    target
+        .bootstrap_remote(BootstrapPayload {
+            protocol_version: PROTOCOL_VERSION,
+            epoch: epoch(),
+            watermark: 0,
+            tasks: vec![first.clone(), second.clone(), third.clone()],
+        })
+        .unwrap();
+
+    target
+        .reorder_task(&third.id, Some(&second.id), Some(&first.id))
+        .unwrap();
+
+    assert_eq!(
+        active_in_progress_ids(&target),
+        vec![first.id.clone(), third.id.clone(), second.id.clone()]
+    );
+    assert_eq!(target.get_task(&first.id).unwrap().result.order_key, "V");
+    assert_ne!(target.get_task(&second.id).unwrap().result.order_key, "V");
+    assert_eq!(target.next_outbox(100).unwrap().result.len(), 2);
+}
+
+#[test]
+fn restoring_in_progress_tasks_preserves_remaining_manual_order() {
+    let service = service();
+    let first = service
+        .create_task(in_progress_input("First", Priority::Low))
+        .unwrap()
+        .result;
+    let second = service
+        .create_task(in_progress_input("Second", Priority::High))
+        .unwrap()
+        .result;
+    let third = service
+        .create_task(in_progress_input("Third", Priority::Low))
+        .unwrap()
+        .result;
+
+    service.complete_task(&second.id).unwrap();
+    assert_eq!(
+        active_in_progress_ids(&service),
+        vec![first.id.clone(), third.id.clone()]
+    );
+    service.restore_task(&second.id).unwrap();
+    assert_eq!(
+        active_in_progress_ids(&service),
+        vec![first.id.clone(), second.id.clone(), third.id.clone()]
+    );
+
+    service.delete_task(&first.id).unwrap();
+    assert_eq!(
+        active_in_progress_ids(&service),
+        vec![second.id.clone(), third.id.clone()]
+    );
+    service.undo_delete(&first.id).unwrap();
+    assert_eq!(
+        active_in_progress_ids(&service),
+        vec![first.id, second.id, third.id]
+    );
+}
+
 #[test]
 fn reorder_requires_current_adjacent_anchors() {
     let service = service();

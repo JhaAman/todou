@@ -94,7 +94,7 @@ export function CommandPalette(props: CommandPaletteProps) {
         { id: "move-today", label: "Move selected task to Today", detail: "Make it part of today's list", icon: <CalendarDays />, shortcut: props.shortcuts.moveToday, run: () => closeAnd(() => props.onMoveSelected("today")) },
         { id: "move-inbox", label: "Move selected task to Inbox", detail: "Clears its due date", icon: <Inbox />, shortcut: props.shortcuts.moveInbox, run: () => closeAnd(() => props.onMoveSelected("inbox")) },
       ] : []),
-      { id: "priority", label: props.selectedTask.priority === "high" ? "Set selected task to low priority" : "Set selected task to high priority", detail: "Changes its list tier", icon: <Flag />, shortcut: props.shortcuts.togglePriority, run: () => closeAnd(props.onTogglePrioritySelected) },
+      { id: "priority", label: props.selectedTask.priority === "high" ? "Set selected task to low priority" : "Set selected task to high priority", detail: "Change its priority flag", icon: <Flag />, shortcut: props.shortcuts.togglePriority, run: () => closeAnd(props.onTogglePrioritySelected) },
       { id: "area", label: `Set selected task to ${props.selectedTask.area === "work" ? "personal" : "work"}`, detail: "Change its area accent", icon: <UserRound />, shortcut: props.shortcuts.toggleArea, run: () => closeAnd(props.onToggleAreaSelected) },
       { id: "delete", label: "Delete selected task", detail: "Recoverable only with Undo", icon: <Trash2 />, shortcut: props.shortcuts.delete, run: () => closeAnd(props.onDeleteSelected) },
     ] satisfies PaletteCommand[] : []),

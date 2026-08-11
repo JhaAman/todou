@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { taskClient, type TaskClient } from "../../lib/taskClient";
-import { compareTasks } from "../../lib/taskOrdering";
+import { compareTasks, shareOrderingScope } from "../../lib/taskOrdering";
 import type { CreateTaskInput, EditableTaskPatch, Task, UndoAction } from "../../lib/types";
 
 function replaceTask(tasks: Task[], next: Task): Task[] {
@@ -13,7 +13,7 @@ function optimisticReorder(tasks: Task[], id: string, beforeId?: string, afterId
   const moving = tasks.find((task) => task.id === id);
   if (!moving) return tasks;
   const tier = tasks
-    .filter((task) => task.bucket === moving.bucket && task.priority === moving.priority && !task.completedAt && !task.deletedAt && task.id !== id)
+    .filter((task) => shareOrderingScope(task, moving) && !task.completedAt && !task.deletedAt && task.id !== id)
     .sort(compareTasks);
   const targetId = beforeId ?? afterId;
   const targetIndex = targetId ? tier.findIndex((task) => task.id === targetId) : tier.length;

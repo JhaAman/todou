@@ -1,7 +1,8 @@
 import type { Task } from "./types";
 
 export function compareTasks(a: Task, b: Task): number {
-  if (a.priority !== b.priority) {
+  const bothInProgress = a.bucket === "in_progress" && b.bucket === "in_progress";
+  if (!bothInProgress && a.priority !== b.priority) {
     return a.priority === "high" ? -1 : 1;
   }
 
@@ -15,6 +16,10 @@ export interface ReorderAnchors {
   afterId?: string;
 }
 
+export function shareOrderingScope(a: Task, b: Task): boolean {
+  return a.bucket === b.bucket && (a.bucket === "in_progress" || a.priority === b.priority);
+}
+
 export function reorderAnchors(
   tasks: Task[],
   movingId: string,
@@ -23,15 +28,14 @@ export function reorderAnchors(
 ): ReorderAnchors | null {
   const moving = tasks.find((task) => task.id === movingId && !task.deletedAt && !task.completedAt);
   const target = tasks.find((task) => task.id === targetId && !task.deletedAt && !task.completedAt);
-  if (!moving || !target || moving.bucket !== target.bucket || moving.priority !== target.priority) return null;
+  if (!moving || !target || !shareOrderingScope(moving, target)) return null;
 
   const tier = tasks
     .filter((task) => (
       task.id !== movingId
       && !task.deletedAt
       && !task.completedAt
-      && task.bucket === moving.bucket
-      && task.priority === moving.priority
+      && shareOrderingScope(task, moving)
     ))
     .sort(compareTasks);
   const targetIndex = tier.findIndex((task) => task.id === targetId);

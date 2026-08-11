@@ -1,19 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Sparkles, Square } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { Check, GripVertical, Sparkles, Square } from "lucide-react";
 import {
   readErrorMessage,
   taskClient,
   type TaskClient,
 } from "../../lib/taskClient";
+import { reorderAnchors, tasksForBucket } from "../../lib/taskOrdering";
 import type { Task } from "../../lib/types";
 
 const congratulationsDurationMs = 1_500;
 const workModeTaskLimit = 3;
+const workModeTaskDragType = "text/todou-work-mode-task";
 
 export type WorkModeClient = Pick<
   TaskClient,
   | "listTasks"
   | "completeTask"
+  | "reorderTask"
   | "subscribe"
   | "loadWorkModeActive"
   | "subscribeWorkModeActive"
@@ -29,6 +32,8 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
   const [busy, setBusy] = useState(false);
   const [celebrating, setCelebrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; edge: "before" | "after" } | null>(null);
   const activeRef = useRef(false);
   const activeEventSequenceRef = useRef(0);
   const celebratingRef = useRef(false);
@@ -96,7 +101,7 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
         finishAll();
         return;
       }
-      setTasks(currentTasks.slice(0, workModeTaskLimit));
+      setTasks(tasksForBucket(currentTasks, "in_progress").slice(0, workModeTaskLimit));
       setError(null);
     } catch (reason) {
       if (activeRef.current) {
@@ -177,6 +182,49 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
     }
   };
 
+  const reorderTask = async (movingId: string, targetId: string, edge: "before" | "after") => {
+    if (busy || celebratingRef.current) return;
+    const anchors = reorderAnchors(tasks, movingId, targetId, edge);
+    if (!anchors) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const reordered = await client.reorderTask(movingId, anchors.beforeId, anchors.afterId);
+      setTasks(tasksForBucket(reordered, "in_progress").slice(0, workModeTaskLimit));
+    } catch (reason) {
+      await refreshTasks();
+      setError(readErrorMessage(reason, "Could not reorder this task"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dragOverTask = (event: DragEvent<HTMLLIElement>, targetId: string) => {
+    const movingId = event.dataTransfer.getData(workModeTaskDragType) || draggedTaskId;
+    if (!movingId || movingId === targetId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setDropTarget({
+      id: targetId,
+      edge: event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+    });
+  };
+
+  const dropTask = (event: DragEvent<HTMLLIElement>, targetId: string) => {
+    event.preventDefault();
+    const movingId = event.dataTransfer.getData(workModeTaskDragType) || draggedTaskId;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const edge = dropTarget?.id === targetId
+      ? dropTarget.edge
+      : event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    setDraggedTaskId(null);
+    setDropTarget(null);
+    if (movingId && movingId !== targetId && edge) {
+      void reorderTask(movingId, targetId, edge);
+    }
+  };
+
   if (celebrating) {
     return (
       <main className="work-mode-window is-celebrating">
@@ -210,7 +258,28 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
         </span>
         <ul>
           {tasks.map((task) => (
-            <li className="work-mode-task" key={task.id}>
+            <li
+              className={`work-mode-task${draggedTaskId === task.id ? " is-dragging" : ""}${dropTarget?.id === task.id ? ` drop-${dropTarget.edge}` : ""}`}
+              key={task.id}
+              draggable={!busy}
+              aria-roledescription="sortable task"
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData(workModeTaskDragType, task.id);
+                setDraggedTaskId(task.id);
+              }}
+              onDragEnd={() => {
+                setDraggedTaskId(null);
+                setDropTarget(null);
+              }}
+              onDragOver={(event) => dragOverTask(event, task.id)}
+              onDragLeave={(event) => {
+                if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+                if (dropTarget?.id === task.id) setDropTarget(null);
+              }}
+              onDrop={(event) => dropTask(event, task.id)}
+            >
+              <GripVertical size={14} role="img" aria-label={`Drag ${task.title} to reorder`} />
               <strong title={task.title}>{task.title}</strong>
               <button
                 type="button"

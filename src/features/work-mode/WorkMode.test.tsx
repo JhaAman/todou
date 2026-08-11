@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { TaskClient } from "../../lib/taskClient";
 import type { Task } from "../../lib/types";
 import { WorkMode, type WorkModeClient } from "./WorkMode";
 
-function task(id: string, title: string): Task {
+function task(id: string, title: string, overrides: Partial<Task> = {}): Task {
   return {
     id,
     title,
@@ -18,20 +19,21 @@ function task(id: string, title: string): Task {
     deletedAt: null,
     createdAt: "2026-07-28T12:00:00.000Z",
     updatedAt: "2026-07-28T12:00:00.000Z",
+    ...overrides,
   };
 }
 
-function fakeClient(tasks: Task[]): WorkModeClient & {
+type FakeWorkModeClient = WorkModeClient & Pick<TaskClient, "reorderTask"> & {
   emitActive: (active: boolean) => void;
   emitTasks: () => void;
-} {
+};
+
+function fakeClient(tasks: Task[]): FakeWorkModeClient {
   let activeListener: ((active: boolean) => void) | null = null;
   let taskListener: (() => void) | null = null;
-  const client: WorkModeClient & {
-    emitActive: (active: boolean) => void;
-    emitTasks: () => void;
-  } = {
+  const client: FakeWorkModeClient = {
     listTasks: vi.fn(async () => tasks),
+    reorderTask: vi.fn(async () => tasks),
     completeTask: vi.fn(async (id) => {
       const index = tasks.findIndex((candidate) => candidate.id === id);
       const current = tasks[index];
@@ -63,12 +65,21 @@ function fakeClient(tasks: Task[]): WorkModeClient & {
   return client;
 }
 
+function dataTransfer(): DataTransfer {
+  const values = new Map<string, string>();
+  return {
+    effectAllowed: "none",
+    getData: (type: string) => values.get(type) ?? "",
+    setData: (type: string, value: string) => { values.set(type, value); },
+  } as unknown as DataTransfer;
+}
+
 describe("work mode", () => {
   it("shows every ordered In Progress task", async () => {
     const client = fakeClient([
-      task("first", "Write the launch brief"),
-      task("second", "Review the metrics"),
-      task("third", "Ship the release"),
+      task("third", "Ship the release", { priority: "high", orderKey: "C" }),
+      task("first", "Write the launch brief", { priority: "low", orderKey: "A" }),
+      task("second", "Review the metrics", { priority: "high", orderKey: "B" }),
     ]);
 
     render(<WorkMode client={client} />);
@@ -87,12 +98,42 @@ describe("work mode", () => {
       ]);
   });
 
+  it("reorders tasks by dragging across priority values", async () => {
+    const client = fakeClient([
+      task("first", "Write the launch brief", { priority: "low", orderKey: "A" }),
+      task("second", "Review the metrics", { priority: "high", orderKey: "B" }),
+      task("third", "Ship the release", { priority: "low", orderKey: "C" }),
+    ]);
+    render(<WorkMode client={client} />);
+    const source = (await screen.findByText("Write the launch brief")).closest("li");
+    const target = screen.getByText("Ship the release").closest("li");
+    if (!source || !target) throw new Error("Expected Work Mode task rows");
+    expect(source).toHaveAttribute("draggable", "true");
+    expect(screen.getByRole("img", { name: "Drag Write the launch brief to reorder" })).toBeInTheDocument();
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      top: 0,
+      height: 100,
+    } as DOMRect);
+    const transfer = dataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer: transfer });
+    fireEvent.dragOver(target, { clientY: 75, dataTransfer: transfer });
+    fireEvent.dragLeave(target, { relatedTarget: screen.getByText("Ship the release"), dataTransfer: transfer });
+    fireEvent.drop(target, { clientY: 75, dataTransfer: transfer });
+
+    await waitFor(() => expect(client.reorderTask).toHaveBeenCalledWith(
+      "first",
+      undefined,
+      "third",
+    ));
+  });
+
   it("never displays more than the three-task limit", async () => {
     const client = fakeClient([
-      task("first", "Write the launch brief"),
-      task("second", "Review the metrics"),
-      task("third", "Ship the release"),
-      task("fourth", "Plan the follow-up"),
+      task("first", "Write the launch brief", { orderKey: "A" }),
+      task("second", "Review the metrics", { orderKey: "B" }),
+      task("third", "Ship the release", { orderKey: "C" }),
+      task("fourth", "Plan the follow-up", { orderKey: "D" }),
     ]);
 
     render(<WorkMode client={client} />);

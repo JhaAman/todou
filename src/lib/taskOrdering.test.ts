@@ -35,6 +35,19 @@ describe("task list ordering", () => {
     expect(result.map(({ id }) => id)).toEqual(["high-a", "high-b", "low-a"]);
   });
 
+  it("orders In Progress only by its manual order", () => {
+    const result = tasksForBucket(
+      [
+        task({ id: "high-last", bucket: "in_progress", priority: "high", orderKey: "c" }),
+        task({ id: "low-first", bucket: "in_progress", priority: "low", orderKey: "a" }),
+        task({ id: "high-middle", bucket: "in_progress", priority: "high", orderKey: "b" }),
+      ],
+      "in_progress",
+    );
+
+    expect(result.map(({ id }) => id)).toEqual(["low-first", "high-middle", "high-last"]);
+  });
+
   it("uses bytewise order so JavaScript agrees with SQLite and Postgres", () => {
     const result = tasksForBucket([
       task({ id: "lowercase", orderKey: "a" }),
@@ -57,6 +70,19 @@ describe("task list ordering", () => {
       beforeId: "d",
     });
     expect(reorderAnchors(tasks, "d", "a", "before")).toEqual({ beforeId: "a" });
+  });
+
+  it("derives In Progress reorder anchors across priority values", () => {
+    const tasks = [
+      task({ id: "a", bucket: "in_progress", priority: "low", orderKey: "A" }),
+      task({ id: "b", bucket: "in_progress", priority: "high", orderKey: "B" }),
+      task({ id: "c", bucket: "in_progress", priority: "low", orderKey: "C" }),
+    ];
+
+    expect(reorderAnchors(tasks, "c", "b", "before")).toEqual({
+      afterId: "a",
+      beforeId: "b",
+    });
   });
 
   it("keeps deleted and completed tasks out of active buckets", () => {

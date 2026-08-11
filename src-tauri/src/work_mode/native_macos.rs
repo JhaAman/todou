@@ -22,7 +22,7 @@ use std::{
 };
 use tauri::{AppHandle, WebviewWindow};
 
-const DRAG_REGION_TRAILING_INSET: f64 = 132.0;
+const DRAG_REGION_HEIGHT_POINTS: f64 = 18.0;
 const WORK_WINDOW_CORNER_RADIUS: f64 = 8.0;
 
 static WORK_MODE_APP: OnceLock<AppHandle> = OnceLock::new();
@@ -273,15 +273,14 @@ fn install_drag_view(panel: &WorkModePanel) -> AppResult<()> {
         .contentView()
         .ok_or_else(|| AppError::storage("work-mode content view is unavailable"))?;
     let mut frame = content.bounds();
-    frame.size.width = (frame.size.width - DRAG_REGION_TRAILING_INSET).max(1.0);
+    frame.size.height = frame.size.height.min(DRAG_REGION_HEIGHT_POINTS);
+    frame.origin.y = (content.bounds().size.height - frame.size.height).max(0.0);
     let drag_view = WorkModeDragView::new(
         MainThreadMarker::new()
             .ok_or_else(|| AppError::storage("work-mode drag view requires the main thread"))?,
     );
     drag_view.setFrame(frame);
-    drag_view.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
-    );
+    drag_view.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
     content.addSubview(&drag_view);
     Ok(())
 }
