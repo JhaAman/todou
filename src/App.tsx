@@ -354,7 +354,7 @@ export default function App() {
   const openComposer = useCallback((bucket?: Exclude<Bucket, "in_progress">) => {
     const contextBucket = view === "today" || view === "inbox"
       ? view
-      : view === "home" ? selectedTask?.bucket : undefined;
+      : selectedTask?.bucket;
     const destination = inAppTaskDestination(bucket, contextBucket);
     if (view === "search" || view === "logbook") setView(destination);
     setComposerBucket(destination);

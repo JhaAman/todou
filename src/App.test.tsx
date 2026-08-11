@@ -384,6 +384,21 @@ describe("new task keyboard shortcuts", () => {
     }));
   });
 
+  it("uses the selected task context when Command-N is pressed in Search", async () => {
+    await renderApp([task({ id: "search-context", title: "Search result", bucket: "today" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Search" }), { target: { value: "Search result" } });
+    fireEvent.click(taskRow("Search result"));
+
+    fireEvent.keyDown(document.body, { key: "n", metaKey: true });
+
+    const destination = taskSection("today");
+    expect(within(destination).getByLabelText("Task title")).toBeInTheDocument();
+    fireEvent.change(within(destination).getByLabelText("Task title"), { target: { value: "Search capture" } });
+    fireEvent.submit(within(destination).getByRole("form", { name: /Add task to/i }));
+    await waitFor(() => expect(storedTaskByTitle("Search capture")).toMatchObject({ bucket: "today" }));
+  });
+
   it("creates an unscheduled Inbox task with unmodified Space", async () => {
     await renderApp([]);
 

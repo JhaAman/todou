@@ -12,7 +12,16 @@ export function newTaskBucket(
   dueDate: string | null | undefined,
   referenceDate = new Date(),
 ): Bucket {
-  if (requestedBucket === "in_progress" || requestedBucket === "today") return requestedBucket;
+  if (requestedBucket === "today") return "today";
+  return scheduledNewTaskBucket(requestedBucket, dueDate, referenceDate);
+}
+
+export function scheduledNewTaskBucket(
+  requestedBucket: Bucket | undefined,
+  dueDate: string | null | undefined,
+  referenceDate = new Date(),
+): Bucket {
+  if (requestedBucket === "in_progress") return "in_progress";
   return dueDate && dueDate <= localDateString(referenceDate) ? "today" : "inbox";
 }
 
