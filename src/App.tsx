@@ -22,6 +22,7 @@ import { TaskInspector } from "./features/tasks/TaskInspector";
 import { TaskSection } from "./features/tasks/TaskSection";
 import { useTaskController } from "./features/tasks/useTaskController";
 import { loadPreferences, savePreferences } from "./lib/preferences";
+import { inAppTaskDestination } from "./lib/newTaskSchedule";
 import { isInteractiveShortcutTarget, shortcutLabels, shortcutMatches } from "./lib/shortcuts";
 import { startRealtimeWake } from "./lib/realtimeWake";
 import {
@@ -351,10 +352,13 @@ export default function App() {
   }, [view]);
 
   const openComposer = useCallback((bucket?: Exclude<Bucket, "in_progress">) => {
-    const defaultBucket = bucket ?? (view === "inbox" ? "inbox" : view === "today" || view === "home" ? "today" : "inbox");
-    if (view === "search" || view === "logbook") setView(defaultBucket);
-    setComposerBucket(defaultBucket);
-  }, [view]);
+    const contextBucket = view === "today" || view === "inbox"
+      ? view
+      : view === "home" ? selectedTask?.bucket : undefined;
+    const destination = inAppTaskDestination(bucket, contextBucket);
+    if (view === "search" || view === "logbook") setView(destination);
+    setComposerBucket(destination);
+  }, [selectedTask?.bucket, view]);
 
   const openPalette = useCallback((mode: PaletteMode = "commands") => {
     setPaletteMode(mode);

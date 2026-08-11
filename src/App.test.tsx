@@ -38,7 +38,7 @@ function taskRow(title: string): HTMLElement {
 
 function taskSection(bucket: Bucket): HTMLElement {
   const name = bucket === "in_progress" ? "In Progress" : bucket === "today" ? "Today" : "Inbox";
-  return screen.getByRole("region", { name });
+  return screen.getByRole("region", { name: new RegExp(`^${name}( tasks)?$`) });
 }
 
 function dataTransfer(): DataTransfer {
@@ -344,6 +344,46 @@ describe("task move keyboard shortcuts", () => {
 describe("new task keyboard shortcuts", () => {
   beforeEach(() => localStorage.clear());
 
+  it.each([
+    { bucket: "today" as const, sectionName: "Today", taskTitle: "Lane capture A" },
+    { bucket: "inbox" as const, sectionName: "Inbox", taskTitle: "Lane capture B" },
+  ])("creates a task in $sectionName from its section add button", async ({ bucket, sectionName, taskTitle }) => {
+    await renderApp([]);
+    const section = taskSection(bucket);
+
+    fireEvent.click(within(section).getByRole("button", { name: `Add task to ${sectionName}` }));
+    fireEvent.change(within(section).getByLabelText("Task title"), { target: { value: taskTitle } });
+    fireEvent.submit(within(section).getByRole("form", { name: /Add task to/i }));
+
+    await waitFor(() => expect(storedTaskByTitle(taskTitle)).toMatchObject({
+      bucket,
+      dueDate: null,
+    }));
+  });
+
+  it.each([
+    { context: "Today", selectedBucket: "today" as Bucket | null, expectedBucket: "today" as const, taskTitle: "Keyboard capture A" },
+    { context: "Inbox", selectedBucket: "inbox" as Bucket | null, expectedBucket: "inbox" as const, taskTitle: "Keyboard capture B" },
+    { context: "In Progress", selectedBucket: "in_progress" as Bucket | null, expectedBucket: "inbox" as const, taskTitle: "Keyboard capture C" },
+    { context: "no section", selectedBucket: null, expectedBucket: "inbox" as const, taskTitle: "Keyboard capture D" },
+  ])("creates with Command-N in $context context", async ({ context, selectedBucket, expectedBucket, taskTitle }) => {
+    const selectedTitle = `${context} context`;
+    await renderApp(selectedBucket ? [task({ id: `context-${selectedBucket}`, title: selectedTitle, bucket: selectedBucket })] : []);
+    if (selectedBucket) fireEvent.click(taskRow(selectedTitle));
+
+    fireEvent.keyDown(document.body, { key: "n", metaKey: true });
+
+    const destination = taskSection(expectedBucket);
+    expect(within(destination).getByLabelText("Task title")).toBeInTheDocument();
+    fireEvent.change(within(destination).getByLabelText("Task title"), { target: { value: taskTitle } });
+    fireEvent.submit(within(destination).getByRole("form", { name: /Add task to/i }));
+
+    await waitFor(() => expect(storedTaskByTitle(taskTitle)).toMatchObject({
+      bucket: expectedBucket,
+      dueDate: null,
+    }));
+  });
+
   it("creates an unscheduled Inbox task with unmodified Space", async () => {
     await renderApp([]);
 
@@ -389,7 +429,7 @@ describe("new task keyboard shortcuts", () => {
     }));
   });
 
-  it("creates a future-dated task from Today in Inbox", async () => {
+  it("keeps a future-dated task in the Today section where it was composed", async () => {
     await renderApp([]);
     const navigation = within(screen.getByLabelText("Primary navigation"));
     fireEvent.click(navigation.getByRole("button", { name: /^Today/ }));
@@ -398,10 +438,10 @@ describe("new task keyboard shortcuts", () => {
     fireEvent.submit(screen.getByRole("form", { name: /Add task to/i }));
 
     await waitFor(() => expect(storedTaskByTitle("Prepare")).toMatchObject({
-      bucket: "inbox",
+      bucket: "today",
       dueDate: expect.any(String),
     }));
-    expect(screen.queryByText("Prepare", { selector: ".task-title" })).not.toBeInTheDocument();
+    expect(within(taskSection("today")).getAllByText("Prepare", { selector: ".task-title" }).length).toBeGreaterThan(0);
   });
 
   it.each([

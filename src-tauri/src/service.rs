@@ -219,8 +219,8 @@ impl TaskService {
         validate_uuid(&id, "id")?;
 
         let local_date = self.inner.clock.local_date();
-        let bucket = if input.bucket == Bucket::InProgress {
-            Bucket::InProgress
+        let bucket = if matches!(input.bucket, Bucket::InProgress | Bucket::Today) {
+            input.bucket
         } else if due_date.is_some_and(|date| date <= local_date) {
             Bucket::Today
         } else {

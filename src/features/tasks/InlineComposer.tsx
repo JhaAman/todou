@@ -1,7 +1,6 @@
 import { useMemo, useState, type FocusEvent, type FormEvent, type KeyboardEvent } from "react";
 import { CalendarDays, Clock3, CornerDownLeft, Flag, Inbox, UserRound, X } from "lucide-react";
 import { parseNaturalLanguage } from "../../lib/naturalLanguage";
-import { newTaskBucket } from "../../lib/newTaskSchedule";
 import type { Area, Bucket, CreateTaskInput, Priority, Task } from "../../lib/types";
 
 interface InlineComposerProps {
@@ -28,7 +27,7 @@ export function InlineComposer({ bucket, defaultArea, onCreate, onCreated, onCan
   const parsed = useMemo(() => parseNaturalLanguage(value), [value]);
   const effectivePriority = parsed.fields.priority ?? priority;
   const effectiveArea = parsed.fields.area ?? area;
-  const effectiveBucket = newTaskBucket(parsed.fields.bucket ?? bucket, parsed.fields.dueDate);
+  const effectiveBucket = parsed.fields.bucket ?? bucket;
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
