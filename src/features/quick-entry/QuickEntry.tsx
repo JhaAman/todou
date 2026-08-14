@@ -56,9 +56,11 @@ function trimTrailingUrlPunctuation(value: string): string {
 function extractPastedUrls(input: string): { text: string; urls: string[]; fallbackTitle: string } {
   const urls: string[] = [];
   const ranges: Array<{ start: number; end: number }> = [];
+  const matches = [...input.matchAll(pastedUrlPattern)];
+  const containsOnlyOneUrl = matches.length === 1 && input.trim() === matches[0]?.[0];
 
-  for (const match of input.matchAll(pastedUrlPattern)) {
-    const candidate = trimTrailingUrlPunctuation(match[0]);
+  for (const match of matches) {
+    const candidate = containsOnlyOneUrl ? match[0] : trimTrailingUrlPunctuation(match[0]);
     try {
       const url = new URL(candidate);
       if (url.protocol !== "http:" && url.protocol !== "https:") continue;
@@ -162,6 +164,8 @@ export function QuickEntry() {
 
   const save = async () => {
     if (!parsed.title.trim() || saving) return;
+    const originatingSessionId = sessionIdRef.current;
+    const isCurrentSession = () => originatingSessionId === sessionIdRef.current;
     const description = descriptionLinks.join("\n");
     if (Array.from(description).length > taskDescriptionMaxLength) {
       setSaveError("Too many links");
@@ -181,25 +185,25 @@ export function QuickEntry() {
           estimateMinutes: parsed.fields.estimateMinutes ?? null,
         });
         taskId = created.id;
-        if (description) setPendingCreatedTaskId(taskId);
+        if (description && isCurrentSession()) setPendingCreatedTaskId(taskId);
       }
       if (description) await taskClient.updateTask(taskId, { description });
+      if (!isCurrentSession()) return;
       setPendingCreatedTaskId(null);
       preferences.current = { ...preferences.current, lastArea: finalArea };
       savePreferences(preferences.current);
       setDescriptionLinks([]);
       setSaved(true);
       if (isTauriRuntime()) {
-        const savedSessionId = sessionIdRef.current;
-        window.setTimeout(() => void close(savedSessionId), 120);
+        window.setTimeout(() => void close(originatingSessionId), 120);
       } else {
         setValue("");
         window.setTimeout(() => setSaved(false), 1_500);
       }
     } catch {
-      setSaveError("Couldn’t save");
+      if (isCurrentSession()) setSaveError("Couldn’t save");
     } finally {
-      setSaving(false);
+      if (isCurrentSession()) setSaving(false);
     }
   };
 

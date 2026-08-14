@@ -155,6 +155,17 @@ describe("quick entry", () => {
     expect(savedTask("Review")?.description).toBe("https://example.com/proposal");
   });
 
+  it("preserves punctuation that belongs to a URL-only paste", async () => {
+    render(<QuickEntry />);
+
+    pasteQuickEntry("https://en.wikipedia.org/wiki/Yahoo!");
+
+    await saveQuickEntry();
+    expect(savedTask("en.wikipedia.org")?.description).toBe(
+      "https://en.wikipedia.org/wiki/Yahoo!",
+    );
+  });
+
   it("rejects oversized pasted-link descriptions before creating a task", async () => {
     render(<QuickEntry />);
     pasteQuickEntry(`Review https://example.com/${"a".repeat(taskDescriptionMaxLength)}`);
