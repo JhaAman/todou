@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuickEntry } from "./QuickEntry";
-import type { Task } from "../../lib/types";
+import { taskClient } from "../../lib/taskClient";
+import { taskDescriptionMaxLength, type Task } from "../../lib/types";
 
 function pasteQuickEntry(value: string, start?: number, end = start) {
   const input = screen.getByLabelText("New task") as HTMLInputElement;
@@ -142,6 +143,42 @@ describe("quick entry", () => {
     expect(screen.getByLabelText("New task")).toHaveValue("Read");
     await saveQuickEntry();
     expect(savedTask("Read")?.description).toBe("https://en.wikipedia.org/wiki/Foo_(bar)");
+  });
+
+  it("keeps sentence punctuation out of the saved URL", async () => {
+    render(<QuickEntry />);
+
+    pasteQuickEntry("Review https://example.com/proposal.");
+
+    expect(screen.getByLabelText("New task")).toHaveValue("Review.");
+    await saveQuickEntry();
+    expect(savedTask("Review")?.description).toBe("https://example.com/proposal");
+  });
+
+  it("rejects oversized pasted-link descriptions before creating a task", async () => {
+    render(<QuickEntry />);
+    pasteQuickEntry(`Review https://example.com/${"a".repeat(taskDescriptionMaxLength)}`);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add to Inbox/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many links");
+    expect(savedTask("Review")).toBeUndefined();
+  });
+
+  it("retries a failed description update without creating a duplicate task", async () => {
+    vi.spyOn(taskClient, "updateTask").mockRejectedValueOnce(new Error("Temporary failure"));
+    render(<QuickEntry />);
+    pasteQuickEntry("Review https://example.com/proposal");
+
+    fireEvent.click(screen.getByRole("button", { name: /Add to Inbox/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn’t save");
+    expect(screen.getByLabelText("New task")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Add to Inbox/i }));
+
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    const tasks = JSON.parse(localStorage.getItem("todou.browser.tasks.v1") ?? "[]") as Task[];
+    expect(tasks.filter(({ title }) => title === "Review")).toHaveLength(1);
+    expect(savedTask("Review")?.description).toBe("https://example.com/proposal");
   });
 
   it("keeps no-URL paste behavior and natural-language parsing unchanged", async () => {

@@ -22,7 +22,13 @@ import { localDateString, scheduledNewTaskBucket } from "../../lib/newTaskSchedu
 import { loadPreferences, savePreferences } from "../../lib/preferences";
 import { isTauriRuntime, taskClient } from "../../lib/taskClient";
 import { applyTheme } from "../../lib/themes";
-import type { Area, Bucket, Priority, ThemeId } from "../../lib/types";
+import {
+  taskDescriptionMaxLength,
+  type Area,
+  type Bucket,
+  type Priority,
+  type ThemeId,
+} from "../../lib/types";
 
 const tokenIcons = {
   date: CalendarDays,
@@ -34,12 +40,25 @@ const tokenIcons = {
 
 const pastedUrlPattern = /https?:\/\/[^\s<>"']+/gi;
 
+function trimTrailingUrlPunctuation(value: string): string {
+  let candidate = value.replace(/[.,;:!?]+$/, "");
+  for (const [opening, closing] of [["(", ")"], ["[", "]"], ["{", "}"]] as const) {
+    while (
+      candidate.endsWith(closing)
+      && candidate.split(closing).length > candidate.split(opening).length
+    ) {
+      candidate = candidate.slice(0, -1);
+    }
+  }
+  return candidate;
+}
+
 function extractPastedUrls(input: string): { text: string; urls: string[]; fallbackTitle: string } {
   const urls: string[] = [];
   const ranges: Array<{ start: number; end: number }> = [];
 
   for (const match of input.matchAll(pastedUrlPattern)) {
-    const candidate = match[0];
+    const candidate = trimTrailingUrlPunctuation(match[0]);
     try {
       const url = new URL(candidate);
       if (url.protocol !== "http:" && url.protocol !== "https:") continue;
@@ -73,6 +92,8 @@ export function QuickEntry() {
   const [descriptionLinks, setDescriptionLinks] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [pendingCreatedTaskId, setPendingCreatedTaskId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sessionIdRef = useRef<number | null>(null);
   const parsed = useMemo(() => parseNaturalLanguage(value), [value]);
@@ -80,6 +101,7 @@ export function QuickEntry() {
   const finalArea = parsed.fields.area ?? area;
   const finalDueDate = parsed.fields.dueDate ?? dueDate;
   const finalBucket = scheduledNewTaskBucket(parsed.fields.bucket ?? bucket, finalDueDate);
+  const descriptionRetryPending = pendingCreatedTaskId !== null;
 
   const toggleToday = () => {
     const moveToToday = finalBucket === "inbox";
@@ -105,6 +127,8 @@ export function QuickEntry() {
         setDescriptionLinks([]);
         setSaving(false);
         setSaved(false);
+        setSaveError(null);
+        setPendingCreatedTaskId(null);
         window.requestAnimationFrame(() => inputRef.current?.focus());
       });
       const unlistenTheme = await listen<{ themeId: ThemeId }>("todou://theme-preview", (event) => {
@@ -131,24 +155,36 @@ export function QuickEntry() {
     setDueDate(null);
     setDescriptionLinks([]);
     setSaved(false);
+    setSaveError(null);
+    setPendingCreatedTaskId(null);
     if (isTauriRuntime()) await taskClient.hideCurrentWindow(expectedSessionId);
   };
 
   const save = async () => {
     if (!parsed.title.trim() || saving) return;
+    const description = descriptionLinks.join("\n");
+    if (Array.from(description).length > taskDescriptionMaxLength) {
+      setSaveError("Too many links");
+      return;
+    }
     setSaving(true);
+    setSaveError(null);
     try {
-      const created = await taskClient.createTask({
-        title: parsed.title,
-        bucket: finalBucket,
-        priority: finalPriority,
-        area: finalArea,
-        dueDate: finalDueDate,
-        estimateMinutes: parsed.fields.estimateMinutes ?? null,
-      });
-      if (descriptionLinks.length) {
-        await taskClient.updateTask(created.id, { description: descriptionLinks.join("\n") });
+      let taskId = pendingCreatedTaskId;
+      if (!taskId) {
+        const created = await taskClient.createTask({
+          title: parsed.title,
+          bucket: finalBucket,
+          priority: finalPriority,
+          area: finalArea,
+          dueDate: finalDueDate,
+          estimateMinutes: parsed.fields.estimateMinutes ?? null,
+        });
+        taskId = created.id;
+        if (description) setPendingCreatedTaskId(taskId);
       }
+      if (description) await taskClient.updateTask(taskId, { description });
+      setPendingCreatedTaskId(null);
       preferences.current = { ...preferences.current, lastArea: finalArea };
       savePreferences(preferences.current);
       setDescriptionLinks([]);
@@ -160,6 +196,8 @@ export function QuickEntry() {
         setValue("");
         window.setTimeout(() => setSaved(false), 1_500);
       }
+    } catch {
+      setSaveError("Couldn’t save");
     } finally {
       setSaving(false);
     }
@@ -192,6 +230,7 @@ export function QuickEntry() {
     setValue(nextValue);
     if (pasted.urls.length) setDescriptionLinks((links) => [...links, ...pasted.urls]);
     setSaved(false);
+    setSaveError(null);
   };
 
   return (
@@ -211,13 +250,15 @@ export function QuickEntry() {
           <input
             ref={inputRef}
             value={value}
-            onChange={(event) => { setValue(event.target.value); setSaved(false); }}
+            disabled={descriptionRetryPending}
+            onChange={(event) => { setValue(event.target.value); setSaved(false); setSaveError(null); }}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             placeholder="What needs to happen?"
             aria-label="New task"
           />
           {saved && <span className="quick-saved" role="status"><Check size={14} />Saved</span>}
+          {saveError && <span className="quick-saved" role="alert">{saveError}</span>}
         </div>
 
         <div className="quick-preview">
@@ -231,10 +272,10 @@ export function QuickEntry() {
 
         <footer className="quick-footer">
           <div className="quick-options" role="group" aria-label="Task details">
-            <button className={finalPriority === "high" ? "is-active priority" : ""} onClick={() => setPriority(finalPriority === "high" ? "low" : "high")} title="Toggle priority" aria-label="High priority" aria-pressed={finalPriority === "high"}><Flag size={14} fill={finalPriority === "high" ? "currentColor" : "none"} />{finalPriority === "high" ? "High" : "Low"}</button>
-            <button className={`is-active-${finalArea}`} onClick={() => setArea(finalArea === "work" ? "personal" : "work")} title={`Set area to ${finalArea === "work" ? "personal" : "work"}`} aria-label="Work task" aria-pressed={finalArea === "work"}><UserRound size={14} />{finalArea === "work" ? "Work" : "Personal"}</button>
-            <button onClick={toggleToday} title={`Move to ${finalBucket === "inbox" ? "Today" : "Inbox"}`} aria-label="Today list" aria-pressed={finalBucket === "today"}>{finalBucket === "inbox" ? <Inbox size={14} /> : <CornerDownLeft size={14} />}{finalBucket === "inbox" ? "Inbox" : "Today"}</button>
-            <label className={finalDueDate ? "has-value" : ""} title="Due date"><CalendarDays size={14} /><input type="date" value={finalDueDate ?? ""} onChange={(event) => setDueDate(event.target.value || null)} aria-label="Due date" /></label>
+            <button disabled={descriptionRetryPending} className={finalPriority === "high" ? "is-active priority" : ""} onClick={() => setPriority(finalPriority === "high" ? "low" : "high")} title="Toggle priority" aria-label="High priority" aria-pressed={finalPriority === "high"}><Flag size={14} fill={finalPriority === "high" ? "currentColor" : "none"} />{finalPriority === "high" ? "High" : "Low"}</button>
+            <button disabled={descriptionRetryPending} className={`is-active-${finalArea}`} onClick={() => setArea(finalArea === "work" ? "personal" : "work")} title={`Set area to ${finalArea === "work" ? "personal" : "work"}`} aria-label="Work task" aria-pressed={finalArea === "work"}><UserRound size={14} />{finalArea === "work" ? "Work" : "Personal"}</button>
+            <button disabled={descriptionRetryPending} onClick={toggleToday} title={`Move to ${finalBucket === "inbox" ? "Today" : "Inbox"}`} aria-label="Today list" aria-pressed={finalBucket === "today"}>{finalBucket === "inbox" ? <Inbox size={14} /> : <CornerDownLeft size={14} />}{finalBucket === "inbox" ? "Inbox" : "Today"}</button>
+            <label className={finalDueDate ? "has-value" : ""} title="Due date"><CalendarDays size={14} /><input disabled={descriptionRetryPending} type="date" value={finalDueDate ?? ""} onChange={(event) => setDueDate(event.target.value || null)} aria-label="Due date" /></label>
           </div>
           <button
             className="quick-save"
