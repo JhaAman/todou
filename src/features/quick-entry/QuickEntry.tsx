@@ -57,10 +57,15 @@ function extractPastedUrls(input: string): { text: string; urls: string[]; fallb
   const urls: string[] = [];
   const ranges: Array<{ start: number; end: number }> = [];
   const matches = [...input.matchAll(pastedUrlPattern)];
-  const containsOnlyOneUrl = matches.length === 1 && input.trim() === matches[0]?.[0];
+  let cursor = 0;
+  const containsOnlyUrls = matches.length > 0 && matches.every((match) => {
+    const separator = input.slice(cursor, match.index);
+    cursor = (match.index ?? 0) + match[0].length;
+    return !separator.trim();
+  }) && !input.slice(cursor).trim();
 
   for (const match of matches) {
-    const candidate = containsOnlyOneUrl ? match[0] : trimTrailingUrlPunctuation(match[0]);
+    const candidate = containsOnlyUrls ? match[0] : trimTrailingUrlPunctuation(match[0]);
     try {
       const url = new URL(candidate);
       if (url.protocol !== "http:" && url.protocol !== "https:") continue;
@@ -74,7 +79,7 @@ function extractPastedUrls(input: string): { text: string; urls: string[]; fallb
   const firstUrl = urls[0];
   if (!firstUrl) return { text: input, urls, fallbackTitle: "" };
 
-  let cursor = 0;
+  cursor = 0;
   const textSegments: string[] = [];
   for (const { start, end } of ranges) {
     textSegments.push(input.slice(cursor, start));
