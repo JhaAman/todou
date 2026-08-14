@@ -34,12 +34,12 @@ const tokenIcons = {
 
 const pastedUrlPattern = /https?:\/\/[^\s<>"']+/gi;
 
-function extractPastedUrls(input: string): { text: string; urls: string[] } {
+function extractPastedUrls(input: string): { text: string; urls: string[]; fallbackTitle: string } {
   const urls: string[] = [];
   const ranges: Array<{ start: number; end: number }> = [];
 
   for (const match of input.matchAll(pastedUrlPattern)) {
-    const candidate = match[0].replace(/[),.;:!?]+$/, "");
+    const candidate = match[0];
     try {
       const url = new URL(candidate);
       if (url.protocol !== "http:" && url.protocol !== "https:") continue;
@@ -51,7 +51,7 @@ function extractPastedUrls(input: string): { text: string; urls: string[] } {
   }
 
   const firstUrl = urls[0];
-  if (!firstUrl) return { text: input, urls };
+  if (!firstUrl) return { text: input, urls, fallbackTitle: "" };
 
   let cursor = 0;
   const textSegments: string[] = [];
@@ -60,13 +60,7 @@ function extractPastedUrls(input: string): { text: string; urls: string[] } {
     cursor = end;
   }
   textSegments.push(input.slice(cursor));
-  const text = textSegments
-    .join("")
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.;:!?])/g, "$1")
-    .trim();
-
-  return { text: text || new URL(firstUrl).hostname, urls };
+  return { text: textSegments.join(""), urls, fallbackTitle: new URL(firstUrl).hostname };
 }
 
 export function QuickEntry() {
@@ -188,7 +182,14 @@ export function QuickEntry() {
     const start = input.selectionStart ?? value.length;
     const end = input.selectionEnd ?? start;
     const pasted = extractPastedUrls(event.clipboardData.getData("text/plain"));
-    setValue(`${value.slice(0, start)}${pasted.text}${value.slice(end)}`);
+    let nextValue = `${value.slice(0, start)}${pasted.text}${value.slice(end)}`;
+    if (pasted.urls.length) {
+      nextValue = nextValue
+        .replace(/\s+/g, " ")
+        .replace(/\s+([,.;:!?])/g, "$1")
+        .trim() || pasted.fallbackTitle;
+    }
+    setValue(nextValue);
     if (pasted.urls.length) setDescriptionLinks((links) => [...links, ...pasted.urls]);
     setSaved(false);
   };

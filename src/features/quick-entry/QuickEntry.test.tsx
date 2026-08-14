@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { QuickEntry } from "./QuickEntry";
 import type { Task } from "../../lib/types";
 
-function pasteQuickEntry(value: string) {
+function pasteQuickEntry(value: string, start?: number, end = start) {
   const input = screen.getByLabelText("New task") as HTMLInputElement;
+  const selectionStart = start ?? input.value.length;
+  input.setSelectionRange(selectionStart, end ?? selectionStart);
   const defaultAllowed = fireEvent.paste(input, {
     clipboardData: { getData: () => value },
   });
@@ -119,6 +121,27 @@ describe("quick entry", () => {
       title: "docs.example.com",
       description: "https://docs.example.com/guide/start",
     });
+  });
+
+  it("does not add a hostname fallback when the draft already has a title", async () => {
+    render(<QuickEntry />);
+    fireEvent.change(screen.getByLabelText("New task"), { target: { value: "Read this" } });
+
+    pasteQuickEntry("https://docs.example.com/guide");
+
+    expect(screen.getByLabelText("New task")).toHaveValue("Read this");
+    await saveQuickEntry();
+    expect(savedTask("Read this")?.description).toBe("https://docs.example.com/guide");
+  });
+
+  it("preserves a valid URL that ends in a parenthesis", async () => {
+    render(<QuickEntry />);
+
+    pasteQuickEntry("Read https://en.wikipedia.org/wiki/Foo_(bar)");
+
+    expect(screen.getByLabelText("New task")).toHaveValue("Read");
+    await saveQuickEntry();
+    expect(savedTask("Read")?.description).toBe("https://en.wikipedia.org/wiki/Foo_(bar)");
   });
 
   it("keeps no-URL paste behavior and natural-language parsing unchanged", async () => {
