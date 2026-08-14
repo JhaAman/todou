@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from "react";
 import {
   CalendarDays,
   Check,
@@ -25,6 +32,43 @@ const tokenIcons = {
   bucket: Inbox,
 };
 
+const pastedUrlPattern = /https?:\/\/[^\s<>"']+/gi;
+
+function extractPastedUrls(input: string): { text: string; urls: string[] } {
+  const urls: string[] = [];
+  const ranges: Array<{ start: number; end: number }> = [];
+
+  for (const match of input.matchAll(pastedUrlPattern)) {
+    const candidate = match[0].replace(/[),.;:!?]+$/, "");
+    try {
+      const url = new URL(candidate);
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+      urls.push(candidate);
+      ranges.push({ start: match.index ?? 0, end: (match.index ?? 0) + candidate.length });
+    } catch {
+      continue;
+    }
+  }
+
+  const firstUrl = urls[0];
+  if (!firstUrl) return { text: input, urls };
+
+  let cursor = 0;
+  const textSegments: string[] = [];
+  for (const { start, end } of ranges) {
+    textSegments.push(input.slice(cursor, start));
+    cursor = end;
+  }
+  textSegments.push(input.slice(cursor));
+  const text = textSegments
+    .join("")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+
+  return { text: text || new URL(firstUrl).hostname, urls };
+}
+
 export function QuickEntry() {
   const preferences = useRef(loadPreferences());
   const [value, setValue] = useState("");
@@ -32,6 +76,7 @@ export function QuickEntry() {
   const [area, setArea] = useState<Area>(preferences.current.lastArea);
   const [bucket, setBucket] = useState<Bucket>("inbox");
   const [dueDate, setDueDate] = useState<string | null>(null);
+  const [descriptionLinks, setDescriptionLinks] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -63,6 +108,7 @@ export function QuickEntry() {
         setArea(preferences.current.lastArea);
         setBucket("inbox");
         setDueDate(null);
+        setDescriptionLinks([]);
         setSaving(false);
         setSaved(false);
         window.requestAnimationFrame(() => inputRef.current?.focus());
@@ -89,6 +135,7 @@ export function QuickEntry() {
     setPriority("low");
     setBucket("inbox");
     setDueDate(null);
+    setDescriptionLinks([]);
     setSaved(false);
     if (isTauriRuntime()) await taskClient.hideCurrentWindow(expectedSessionId);
   };
@@ -97,7 +144,7 @@ export function QuickEntry() {
     if (!parsed.title.trim() || saving) return;
     setSaving(true);
     try {
-      await taskClient.createTask({
+      const created = await taskClient.createTask({
         title: parsed.title,
         bucket: finalBucket,
         priority: finalPriority,
@@ -105,8 +152,12 @@ export function QuickEntry() {
         dueDate: finalDueDate,
         estimateMinutes: parsed.fields.estimateMinutes ?? null,
       });
+      if (descriptionLinks.length) {
+        await taskClient.updateTask(created.id, { description: descriptionLinks.join("\n") });
+      }
       preferences.current = { ...preferences.current, lastArea: finalArea };
       savePreferences(preferences.current);
+      setDescriptionLinks([]);
       setSaved(true);
       if (isTauriRuntime()) {
         const savedSessionId = sessionIdRef.current;
@@ -131,6 +182,17 @@ export function QuickEntry() {
     }
   };
 
+  const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    const input = event.currentTarget;
+    const start = input.selectionStart ?? value.length;
+    const end = input.selectionEnd ?? start;
+    const pasted = extractPastedUrls(event.clipboardData.getData("text/plain"));
+    setValue(`${value.slice(0, start)}${pasted.text}${value.slice(end)}`);
+    if (pasted.urls.length) setDescriptionLinks((links) => [...links, ...pasted.urls]);
+    setSaved(false);
+  };
+
   return (
     <main className="quick-window">
       <section className={`quick-card ${saved ? "is-saved" : ""}`}>
@@ -149,6 +211,7 @@ export function QuickEntry() {
             ref={inputRef}
             value={value}
             onChange={(event) => { setValue(event.target.value); setSaved(false); }}
+            onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             placeholder="What needs to happen?"
             aria-label="New task"
