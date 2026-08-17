@@ -42,6 +42,10 @@ const superhumanTheme: ThemeDefinition = {
     "--focus-ring": "#ffffff",
     "--on-accent": "#000000",
     "--shadow": "#00000073",
+    "--area-work-mark": "#41d9ff",
+    "--area-personal-mark": "#ff5bd8",
+    "--area-work-fg": mix("#41d9ff", "#f3f4f7", 0.5),
+    "--area-personal-fg": mix("#ff5bd8", "#f3f4f7", 0.5),
   },
 };
 
@@ -108,6 +112,13 @@ function ensureContrastAcross(backgrounds: string[], color: string, target: stri
   );
 }
 
+// The area chip paints its label over a 10% tint of its own mark, so the guard has to clear that tint too.
+function areaTokens(seed: string, surfaces: string[], text: string): { mark: string; foreground: string } {
+  const mark = ensureContrastAcross(surfaces, seed, text, 3);
+  const chipSurfaces = surfaces.flatMap((surface) => [surface, mix(surface, mark, 0.1)]);
+  return { mark, foreground: ensureContrastAcross(chipSurfaces, mark, text, 4.5) };
+}
+
 function contrastingText(background: string): string {
   return contrastRatio(background, "#000000") >= contrastRatio(background, "#ffffff")
     ? "#000000"
@@ -130,6 +141,8 @@ function resolveVariables(palette: OpenCodeThemePalette, mode: OpenCodeThemeMode
   const textSurfaces = [background, surface, raisedSurface];
   const secondaryText = ensureContrastAcross(textSurfaces, mix(background, text, 0.76), text, 5.5);
   const mutedText = ensureContrastAcross(textSurfaces, mix(background, text, 0.52), text, 4.5);
+  const work = areaTokens(palette.info, textSurfaces, text);
+  const personal = areaTokens(palette.accent ?? palette.primary, textSurfaces, text);
   const focusRing = contrastingText(background);
   const onAccent = contrastingText(palette.primary);
   const accentHover = mix(palette.primary, onAccent === "#000000" ? "#ffffff" : "#000000", 0.08);
@@ -154,6 +167,10 @@ function resolveVariables(palette: OpenCodeThemePalette, mode: OpenCodeThemeMode
     "--focus-ring": focusRing,
     "--on-accent": onAccent,
     "--shadow": withAlpha(isDark ? "#000000" : palette.ink, isDark ? 0.48 : 0.18),
+    "--area-work-mark": work.mark,
+    "--area-personal-mark": personal.mark,
+    "--area-work-fg": work.foreground,
+    "--area-personal-fg": personal.foreground,
   };
 }
 

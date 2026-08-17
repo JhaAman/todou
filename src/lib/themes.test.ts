@@ -45,6 +45,10 @@ const requiredThemeVariables = [
   "--accent",
   "--accent-hover",
   "--accent-soft",
+  "--area-personal-fg",
+  "--area-personal-mark",
+  "--area-work-fg",
+  "--area-work-mark",
   "--bg",
   "--blue",
   "--border",
@@ -163,6 +167,12 @@ describe("themes", () => {
         expect(contrastRatio(surface, document.documentElement.style.getPropertyValue("--text-strong")), `${theme.id} strong text`).toBeGreaterThanOrEqual(4.5);
         expect(contrastRatio(surface, document.documentElement.style.getPropertyValue("--text-secondary")), `${theme.id} secondary text`).toBeGreaterThanOrEqual(5.5);
         expect(contrastRatio(surface, document.documentElement.style.getPropertyValue("--text-muted")), `${theme.id} muted text`).toBeGreaterThanOrEqual(4.5);
+      }
+      for (const surface of surfaces) {
+        for (const area of ["work", "personal"] as const) {
+          expect(contrastRatio(surface, document.documentElement.style.getPropertyValue(`--area-${area}-fg`)), `${theme.id} ${area} area label`).toBeGreaterThanOrEqual(4.5);
+          expect(contrastRatio(surface, document.documentElement.style.getPropertyValue(`--area-${area}-mark`)), `${theme.id} ${area} area mark`).toBeGreaterThanOrEqual(3);
+        }
       }
       for (const focusBackground of focusBackgrounds) {
         expect(contrastRatio(focusBackground, document.documentElement.style.getPropertyValue("--focus-ring")), `${theme.id} focus ring`).toBeGreaterThanOrEqual(3);

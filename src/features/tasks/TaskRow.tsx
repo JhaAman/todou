@@ -197,7 +197,7 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
           {task.priority === "high" && <Flag className="priority-mark" size={12} fill="currentColor" aria-label="High priority" />}
         </div>
         <div className="task-meta">
-          <span className={`area-label ${task.area}`}>{task.area}</span>
+          <span className="sr-only">{task.area}</span>
           {task.dueDate && <span className="meta-item"><CalendarDays size={11} />{prettyDate(task.dueDate)}</span>}
           {task.estimateMinutes && <span className="meta-item"><Clock3 size={11} />{task.estimateMinutes}m</span>}
           {task.completedAt && <span className="meta-item">Completed {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(task.completedAt))}</span>}
