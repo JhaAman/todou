@@ -829,22 +829,24 @@ export default function App() {
             />
           )}
         </div>
-        <footer className="work-mode-launch">
-          <button
-            type="button"
-            disabled={controller.loading || startingWorkMode || !inProgressTasks.length}
-            onClick={() => void startWorkMode()}
-          >
-            <Play size={16} fill="currentColor" />
-            <span>
-              {startingWorkMode
-                ? "Starting work mode…"
-                : inProgressTasks.length
-                  ? "Start work mode"
-                  : "Add an In Progress task to start"}
-            </span>
-          </button>
-        </footer>
+        {view !== "logbook" && (
+          <footer className="work-mode-launch">
+            <button
+              type="button"
+              disabled={controller.loading || startingWorkMode || !inProgressTasks.length}
+              onClick={() => void startWorkMode()}
+            >
+              <Play size={16} fill="currentColor" />
+              <span>
+                {startingWorkMode
+                  ? "Starting work mode…"
+                  : inProgressTasks.length
+                    ? "Start work mode"
+                    : "Add an In Progress task to start"}
+              </span>
+            </button>
+          </footer>
+        )}
       </main>
 
       {selectedTask ? (
