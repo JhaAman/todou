@@ -3,6 +3,8 @@ import { isThemeId } from "./themes";
 import type { AppPreferences, Area, ShortcutAction, ThemeId } from "./types";
 
 const key = "todou.preferences.v1";
+const quickEntryMigrationKey = "todou.preferences.quick-entry-default-migrated.v1";
+const legacyQuickEntryShortcut = "Ctrl+Space";
 
 export const defaultPreferences: AppPreferences = {
   themeId: "superhuman",
@@ -28,10 +30,17 @@ function loadThemeId(value: unknown): ThemeId {
 export function loadPreferences(): AppPreferences {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) ?? "{}") as Partial<AppPreferences>;
+    const savedShortcuts = parsed.shortcuts as Partial<Record<ShortcutAction, string>> | undefined;
+    const shouldMigrateQuickEntry = localStorage.getItem(quickEntryMigrationKey) === null
+      && savedShortcuts?.quickEntry === legacyQuickEntryShortcut;
     return {
       themeId: loadThemeId(parsed.themeId),
       lastArea: (parsed.lastArea ?? defaultPreferences.lastArea) as Area,
-      shortcuts: { ...defaultShortcuts, ...(parsed.shortcuts as Partial<Record<ShortcutAction, string>> | undefined) },
+      shortcuts: {
+        ...defaultShortcuts,
+        ...savedShortcuts,
+        ...(shouldMigrateQuickEntry ? { quickEntry: defaultShortcuts.quickEntry } : {}),
+      },
     };
   } catch {
     return defaultPreferences;
@@ -40,4 +49,5 @@ export function loadPreferences(): AppPreferences {
 
 export function savePreferences(preferences: AppPreferences): void {
   localStorage.setItem(key, JSON.stringify(preferences));
+  localStorage.setItem(quickEntryMigrationKey, "true");
 }

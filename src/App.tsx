@@ -770,6 +770,7 @@ export default function App() {
         onNewTask={() => openComposer()}
         onOpenPalette={() => openPalette("commands")}
         onOpenThemes={() => openPalette("themes")}
+        onOpenShortcuts={() => openPalette("shortcuts")}
         onDropTask={dropTaskIntoBucket}
         todayCount={todayTasks.length}
         inboxCount={inboxTasks.length}

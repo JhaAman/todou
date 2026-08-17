@@ -23,7 +23,7 @@ import {
   Hammer,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { displayShortcut, shortcutFromEvent, shortcutLabels } from "../../lib/shortcuts";
+import { displayShortcut, shortcutFromEvent, shortcutLabels, shortcutsEqual } from "../../lib/shortcuts";
 import { themeById, themes } from "../../lib/themes";
 import type { ShortcutAction, Task, ThemeId, View } from "../../lib/types";
 import { KeyHint } from "../../components/KeyHint";
@@ -105,7 +105,7 @@ export function CommandPalette(props: CommandPaletteProps) {
     { id: "logbook", label: "Open Logbook", detail: "Search and restore completed work", icon: <CheckCircle2 />, run: () => closeAnd(() => props.onNavigate("logbook")) },
     { id: "search", label: "Search all tasks", detail: "Active tasks and Logbook", icon: <Search />, shortcut: props.shortcuts.search, run: () => closeAnd(() => props.onNavigate("search")) },
     { id: "theme", label: "Change theme", detail: themeById(props.committedTheme).name, icon: <Palette />, run: () => enterMode("themes") },
-    { id: "shortcuts", label: "Keyboard shortcuts", detail: "View or change every command", icon: <Keyboard />, run: () => enterMode("shortcuts") },
+    { id: "shortcuts", label: "Keyboard shortcuts", detail: "Change the system-wide Quick Entry shortcut and other commands", icon: <Keyboard />, run: () => enterMode("shortcuts") },
     { id: "export", label: "Export tasks as JSON", detail: "One human-readable file", icon: <Download />, run: () => closeAnd(props.onExport) },
     { id: "dedupe-scan", label: "Check all tasks for duplicates", detail: props.dedupeScanRunning ? "A scan is already running" : "Analyze active tasks now", icon: <Sparkles />, run: () => closeAnd(props.onRunDedupeScan) },
     { id: "ai-settings", label: "AI de-duplication settings", detail: "Configure OpenAI or Anthropic", icon: <BrainCircuit />, run: () => closeAnd(props.onOpenAiSettings) },
@@ -187,7 +187,7 @@ export function CommandPalette(props: CommandPaletteProps) {
       }
       const next = shortcutFromEvent(event);
       if (!next) return;
-      const collision = shortcutActions.find((action) => action !== recording && props.shortcuts[action] === next);
+      const collision = shortcutActions.find((action) => action !== recording && shortcutsEqual(props.shortcuts[action], next));
       if (collision) {
         setShortcutError(`${displayShortcut(next)} is already used by ${shortcutLabels[collision]}.`);
         return;

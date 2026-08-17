@@ -314,7 +314,7 @@ kbd {
 
 .sidebar-bottom {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   padding: 8px;
 }
@@ -1617,6 +1617,7 @@ kbd {
   .app-shell { grid-template-columns: 196px minmax(440px, 1fr) 305px; }
   .workspace-scroll { padding-right: 23px; padding-left: 23px; }
   .segmented-control button { min-width: 52px; }
+  .command-launcher .key-hint { display: none; }
 }
 
 @media (max-width: 900px) {

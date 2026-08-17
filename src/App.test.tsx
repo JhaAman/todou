@@ -526,3 +526,16 @@ describe("sync settings", () => {
     expect(screen.queryByText("Supabase connection saved")).not.toBeInTheDocument();
   });
 });
+
+describe("shortcut settings", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("opens keyboard shortcut recording directly from the sidebar", async () => {
+    await renderApp([]);
+
+    fireEvent.click(within(screen.getByLabelText("Primary navigation")).getByRole("button", { name: "Keyboard shortcuts" }));
+
+    expect(await screen.findByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Quick entry \(system-wide\)/i })).toBeInTheDocument();
+  });
+});

@@ -12,10 +12,11 @@ export const defaultShortcuts: Record<ShortcutAction, string> = {
   toggleArea: "Meta+Shift+A",
   delete: "Meta+Backspace",
   undo: "Meta+Z",
-  quickEntry: "Ctrl+Space",
+  quickEntry: "Ctrl+Shift+Space",
 };
 
 export const shortcutLabels: Record<ShortcutAction, string> = {
+  quickEntry: "Quick entry (system-wide)",
   newTask: "New task",
   commandPalette: "Command palette",
   search: "Search tasks",
@@ -26,7 +27,6 @@ export const shortcutLabels: Record<ShortcutAction, string> = {
   toggleArea: "Toggle work / personal",
   delete: "Delete selected task",
   undo: "Undo last action",
-  quickEntry: "Quick entry (system-wide)",
 };
 
 const modifierOrder = ["Ctrl", "Alt", "Shift", "Meta"];
@@ -58,6 +58,10 @@ function normalizeShortcut(shortcut: string): string {
     .sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
   const key = parts.find((part) => !modifierOrder.includes(part));
   return [...modifiers, ...(key ? [key] : [])].join("+");
+}
+
+export function shortcutsEqual(first: string, second: string): boolean {
+  return normalizeShortcut(first) === normalizeShortcut(second);
 }
 
 export function shortcutFromEvent(event: KeyboardEvent | ReactKeyboardEvent): string | null {

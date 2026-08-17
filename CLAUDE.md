@@ -18,6 +18,7 @@
 - Preferences and Supabase credentials stay device-local. Hosted access uses only a publishable/anonymous key, never a service-role key.
 - OpenAI/Anthropic keys are write-only renderer inputs stored unencrypted in private SQLite metadata. They never sync or export; the shared app identifier makes the same values available to installed and dev builds on this Mac.
 - Every local task create enqueues a device-local LLM dedupe job in the same transaction. Main-window entry wakes it immediately; Quick Entry and MCP jobs drain on the next main-window focus. Remote sync imports never enqueue.
+- The Quick Entry default is registered independently in frontend preferences and native startup; change both, and migrate a persisted old default without overwriting custom shortcuts.
 - Manual dedupe scans wait behind automatic drains, enqueue only missing active-task jobs, and replace stale suggestions for the same task pair.
 - Tauri commands may be bare values or `Revisioned<T>` during internal refactors; the frontend compatibility unwrapping currently accepts both. The Unix socket always returns `{id, ok, result, revision}`.
 - On macOS, keep the main and Work Mode windows' `dragDropEnabled` false so WKWebView receives Todou's HTML5 task-drag events.
