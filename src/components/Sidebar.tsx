@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Command,
   Inbox,
+  Keyboard,
   ListTodo,
   Palette,
   Plus,
@@ -20,6 +21,7 @@ interface SidebarProps {
   onNewTask: () => void;
   onOpenPalette: () => void;
   onOpenThemes: () => void;
+  onOpenShortcuts: () => void;
   onDropTask: (movingId: string, bucket: Bucket) => void;
   todayCount: number;
   inboxCount: number;
@@ -47,6 +49,7 @@ export function Sidebar({
   onNewTask,
   onOpenPalette,
   onOpenThemes,
+  onOpenShortcuts,
   onDropTask,
   todayCount,
   inboxCount,
@@ -141,6 +144,9 @@ export function Sidebar({
       <div className="sidebar-bottom">
         <button className="sidebar-tool theme-tool" onClick={onOpenThemes} aria-label={`Theme: ${theme.name}`} title={`Theme: ${theme.name}`}>
           <Palette size={16} strokeWidth={1.9} />
+        </button>
+        <button className="sidebar-tool" onClick={onOpenShortcuts} aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
+          <Keyboard size={16} strokeWidth={1.9} />
         </button>
         <button className="sidebar-tool command-launcher" onClick={onOpenPalette} aria-label="Commands" title="Commands">
           <Command size={15} />

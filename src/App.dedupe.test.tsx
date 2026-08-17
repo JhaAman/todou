@@ -149,6 +149,12 @@ async function runDedupeScanFromPalette() {
 }
 
 describe("App AI de-duplication lifecycle", () => {
+  it("registers the new native Quick Entry default on startup", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(mocks.registerQuickEntryShortcut).toHaveBeenCalledWith("Control+Shift+Space"));
+  });
+
   it("attaches wake listeners before processing focused startup jobs", async () => {
     render(<App />);
 

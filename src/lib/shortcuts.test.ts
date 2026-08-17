@@ -6,6 +6,10 @@ function keyboardEvent(key: string, modifiers: KeyboardEventInit): KeyboardEvent
 }
 
 describe("shortcut matching", () => {
+  it("uses the Things-safe Quick Entry default", () => {
+    expect(defaultShortcuts.quickEntry).toBe("Ctrl+Shift+Space");
+  });
+
   it("matches defaults regardless of the stored modifier order", () => {
     expect(shortcutMatches(
       keyboardEvent("T", { metaKey: true, shiftKey: true }),

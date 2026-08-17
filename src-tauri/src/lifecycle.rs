@@ -11,7 +11,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-pub const DEFAULT_QUICK_ENTRY_SHORTCUT: &str = "Control+Space";
+pub const DEFAULT_QUICK_ENTRY_SHORTCUT: &str = "Control+Shift+Space";
 
 #[derive(Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

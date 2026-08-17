@@ -140,6 +140,27 @@ describe("command palette", () => {
     expect(onCompleteSelected).toHaveBeenCalledOnce();
   });
 
+  it("records the system-wide Quick Entry shortcut", () => {
+    const onShortcutChange = vi.fn();
+    renderPalette("shortcuts", { onShortcutChange });
+
+    fireEvent.click(screen.getByRole("option", { name: /Quick entry \(system-wide\)/i }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: " ", ctrlKey: true, shiftKey: true });
+
+    expect(onShortcutChange).toHaveBeenCalledWith("quickEntry", "Ctrl+Shift+Space");
+  });
+
+  it("rejects a shortcut collision regardless of modifier order", () => {
+    const onShortcutChange = vi.fn();
+    renderPalette("shortcuts", { onShortcutChange });
+
+    fireEvent.click(screen.getByRole("option", { name: /Quick entry \(system-wide\)/i }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "t", metaKey: true, shiftKey: true });
+
+    expect(onShortcutChange).not.toHaveBeenCalled();
+    expect(screen.getByText(/already used by Move to Today/i)).toBeInTheDocument();
+  });
+
   it("does not offer invalid list moves for a completed task", () => {
     const selectedTask: Task = {
       id: "task-2",
