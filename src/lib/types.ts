@@ -63,7 +63,10 @@ export type ShortcutAction =
   | "undo"
   | "quickEntry";
 
-export type ThemeId = "superhuman" | `${OpenCodeThemeFamilyId}-${OpenCodeThemeMode}`;
+export type ThemeId =
+  | "superhuman"
+  | `graphite-${OpenCodeThemeMode}`
+  | `${OpenCodeThemeFamilyId}-${OpenCodeThemeMode}`;
 
 export interface UndoAction {
   id: string;

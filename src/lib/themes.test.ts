@@ -55,6 +55,7 @@ const requiredThemeVariables = [
   "--border-strong",
   "--danger",
   "--focus-ring",
+  "--ok-fg",
   "--on-accent",
   "--orange",
   "--shadow",
@@ -66,6 +67,7 @@ const requiredThemeVariables = [
   "--text-muted",
   "--text-secondary",
   "--text-strong",
+  "--warn-fg",
 ] as const;
 
 function relativeLuminance(hex: string): number {
@@ -84,6 +86,13 @@ function contrastRatio(first: string, second: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function srgbDistance(first: string, second: string): number {
+  const channels = (hex: string) => hex.slice(1).match(/.{2}/g)!.map((channel) => Number.parseInt(channel, 16));
+  const a = channels(first);
+  const b = channels(second);
+  return Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
+}
+
 afterEach(() => {
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("style");
@@ -94,12 +103,26 @@ describe("themes", () => {
     const expectedIds = openCodeThemeFamilies
       .flatMap((family) => [`${family}-light`, `${family}-dark`])
       .sort();
+    const nativeThemeIds = ["superhuman", "graphite-dark", "graphite-light"];
     const actualIds = themes
       .map(({ id }) => id)
-      .filter((id) => id !== "superhuman")
+      .filter((id) => !nativeThemeIds.includes(id))
       .sort();
 
     expect(actualIds).toEqual(expectedIds);
+  });
+
+  it("lists graphite dark first so the palette fallback matches the default theme", () => {
+    expect(themes[0]?.id).toBe("graphite-dark");
+    expect(themeById("not-a-theme" as Parameters<typeof themeById>[0]).id).toBe("graphite-dark");
+  });
+
+  it("defines an identical variable key set for every theme", () => {
+    // applyTheme sets inline properties and never clears, so a missing key would leak the previous theme's value.
+    const expectedKeys = Object.keys(themes[0]!.variables).sort();
+    for (const theme of themes) {
+      expect(Object.keys(theme.variables).sort(), theme.id).toEqual(expectedKeys);
+    }
   });
 
   it("applies an OpenCode light palette as a light document theme", () => {
@@ -173,7 +196,13 @@ describe("themes", () => {
           expect(contrastRatio(surface, document.documentElement.style.getPropertyValue(`--area-${area}-fg`)), `${theme.id} ${area} area label`).toBeGreaterThanOrEqual(4.5);
           expect(contrastRatio(surface, document.documentElement.style.getPropertyValue(`--area-${area}-mark`)), `${theme.id} ${area} area mark`).toBeGreaterThanOrEqual(3);
         }
+        for (const status of ["--ok-fg", "--warn-fg"] as const) {
+          expect(contrastRatio(surface, document.documentElement.style.getPropertyValue(status)), `${theme.id} ${status}`).toBeGreaterThanOrEqual(4.5);
+        }
       }
+      const workMark = document.documentElement.style.getPropertyValue("--area-work-mark");
+      const personalMark = document.documentElement.style.getPropertyValue("--area-personal-mark");
+      expect(srgbDistance(workMark, personalMark), `${theme.id} area mark distinctness`).toBeGreaterThanOrEqual(40);
       for (const focusBackground of focusBackgrounds) {
         expect(contrastRatio(focusBackground, document.documentElement.style.getPropertyValue("--focus-ring")), `${theme.id} focus ring`).toBeGreaterThanOrEqual(3);
       }
