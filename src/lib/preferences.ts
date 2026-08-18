@@ -7,7 +7,7 @@ const quickEntryMigrationKey = "todou.preferences.quick-entry-default-migrated.v
 const legacyQuickEntryShortcut = "Ctrl+Space";
 
 export const defaultPreferences: AppPreferences = {
-  themeId: "superhuman",
+  themeId: "graphite-dark",
   lastArea: "work",
   shortcuts: defaultShortcuts,
 };

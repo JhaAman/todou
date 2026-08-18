@@ -46,6 +46,8 @@ const superhumanTheme: ThemeDefinition = {
     "--area-personal-mark": "#ff5bd8",
     "--area-work-fg": mix("#41d9ff", "#f3f4f7", 0.5),
     "--area-personal-fg": mix("#ff5bd8", "#f3f4f7", 0.5),
+    "--ok-fg": mix("#41d9ff", "#f3f4f7", 0.5),
+    "--warn-fg": mix("#f5a45d", "#f3f4f7", 0.5),
   },
 };
 
@@ -79,6 +81,12 @@ function contrastRatio(first: string, second: string): number {
   const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
   const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
   return (lighter + 0.05) / (darker + 0.05);
+}
+
+function srgbDistance(first: string, second: string): number {
+  const a = hexChannels(first);
+  const b = hexChannels(second);
+  return Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
 }
 
 function mixUntil(
@@ -119,6 +127,23 @@ function areaTokens(seed: string, surfaces: string[], text: string): { mark: str
   return { mark, foreground: ensureContrastAcross(chipSurfaces, mark, text, 4.5) };
 }
 
+// Some palettes reuse one hue for accent and info, which would make the two area rails indistinguishable.
+function resolvePersonalArea(
+  palette: OpenCodeThemePalette,
+  workMark: string,
+  surfaces: string[],
+  text: string,
+): { mark: string; foreground: string } {
+  const candidates = [palette.accent ?? palette.primary, palette.warning, palette.error];
+  const resolved = candidates.map((seed) => areaTokens(seed, surfaces, text));
+  return (
+    resolved.find((tokens) => srgbDistance(tokens.mark, workMark) >= 40)
+      ?? resolved.reduce((best, tokens) =>
+        srgbDistance(tokens.mark, workMark) > srgbDistance(best.mark, workMark) ? tokens : best,
+      )
+  );
+}
+
 function contrastingText(background: string): string {
   return contrastRatio(background, "#000000") >= contrastRatio(background, "#ffffff")
     ? "#000000"
@@ -139,10 +164,11 @@ function resolveVariables(palette: OpenCodeThemePalette, mode: OpenCodeThemeMode
   const raisedSurface = mix(background, text, isDark ? 0.075 : 0.055);
   const hoverSurface = mix(background, text, isDark ? 0.12 : 0.09);
   const textSurfaces = [background, surface, raisedSurface];
+  const areaSurfaces = [...textSurfaces, hoverSurface];
   const secondaryText = ensureContrastAcross(textSurfaces, mix(background, text, 0.76), text, 5.5);
   const mutedText = ensureContrastAcross(textSurfaces, mix(background, text, 0.52), text, 4.5);
-  const work = areaTokens(palette.info, textSurfaces, text);
-  const personal = areaTokens(palette.accent ?? palette.primary, textSurfaces, text);
+  const work = areaTokens(palette.info, areaSurfaces, text);
+  const personal = resolvePersonalArea(palette, work.mark, areaSurfaces, text);
   const focusRing = contrastingText(background);
   const onAccent = contrastingText(palette.primary);
   const accentHover = mix(palette.primary, onAccent === "#000000" ? "#ffffff" : "#000000", 0.08);
@@ -171,6 +197,8 @@ function resolveVariables(palette: OpenCodeThemePalette, mode: OpenCodeThemeMode
     "--area-personal-mark": personal.mark,
     "--area-work-fg": work.foreground,
     "--area-personal-fg": personal.foreground,
+    "--ok-fg": ensureContrastAcross(areaSurfaces, palette.interactive ?? palette.info, text, 4.5),
+    "--warn-fg": ensureContrastAcross(areaSurfaces, palette.warning, text, 4.5),
   };
 }
 
@@ -190,7 +218,43 @@ const openCodeThemes: ThemeDefinition[] = OPEN_CODE_THEME_FAMILY_IDS.flatMap((fa
   });
 });
 
-export const themes: ThemeDefinition[] = [superhumanTheme, ...openCodeThemes];
+const graphitePalettes: Record<OpenCodeThemeMode, OpenCodeThemePalette> = {
+  dark: {
+    neutral: "#131418",
+    ink: "#e8eaed",
+    primary: "#7d9cb8",
+    accent: "#a58ab8",
+    interactive: "#7d9cb8",
+    info: "#8aa8c0",
+    warning: "#c0a068",
+    error: "#c07a7a",
+  },
+  light: {
+    neutral: "#f4f4f5",
+    ink: "#1b1d21",
+    primary: "#3f6285",
+    accent: "#71567f",
+    interactive: "#3f6285",
+    info: "#3d6a85",
+    warning: "#8a6d3b",
+    error: "#9a4f4f",
+  },
+};
+
+// Graphite stays at index 0: CommandPalette falls back to themes[0] for unresolved ids, and that must match the default.
+const graphiteThemes: ThemeDefinition[] = (["dark", "light"] as const).map((mode) => {
+  const variables = resolveVariables(graphitePalettes[mode], mode);
+  return {
+    id: `graphite-${mode}`,
+    name: `Graphite ${mode === "light" ? "Light" : "Dark"}`,
+    description: "Todou's default quiet graphite with a steel-blue accent",
+    mode,
+    colors: [variables["--bg"]!, variables["--text"]!, variables["--accent"]!, variables["--blue"]!],
+    variables,
+  } satisfies ThemeDefinition;
+});
+
+export const themes: ThemeDefinition[] = [...graphiteThemes, superhumanTheme, ...openCodeThemes];
 
 const themesById = new Map(themes.map((theme) => [theme.id, theme]));
 
@@ -208,5 +272,5 @@ export function applyTheme(themeId: ThemeId): void {
 }
 
 export function themeById(themeId: ThemeId): ThemeDefinition {
-  return themesById.get(themeId) ?? superhumanTheme;
+  return themesById.get(themeId) ?? graphiteThemes[0]!;
 }
