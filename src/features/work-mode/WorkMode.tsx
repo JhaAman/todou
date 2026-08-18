@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { Check, GripVertical, Sparkles, Square } from "lucide-react";
 import {
+  isTauriRuntime,
   readErrorMessage,
   taskClient,
   type TaskClient,
 } from "../../lib/taskClient";
 import { reorderAnchors, tasksForBucket } from "../../lib/taskOrdering";
-import type { Task } from "../../lib/types";
+import { applyTheme } from "../../lib/themes";
+import type { Task, ThemeId } from "../../lib/types";
 
 const congratulationsDurationMs = 1_500;
 const workModeTaskLimit = 3;
@@ -165,6 +167,23 @@ export function WorkMode({ client = taskClient }: WorkModeProps) {
     if (congratulationsTimerRef.current !== null) {
       window.clearTimeout(congratulationsTimerRef.current);
     }
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let cleanup: (() => void) | null = null;
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      const unlisten = await listen<{ themeId: ThemeId }>("todou://theme-preview", (event) => {
+        applyTheme(event.payload.themeId);
+      });
+      if (disposed) unlisten();
+      else cleanup = unlisten;
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
   }, []);
 
   const completeTask = async (taskId: string) => {
