@@ -136,15 +136,11 @@ pub fn show_quick_entry(app: &AppHandle) -> AppResult<()> {
         .get_webview_window("quick-entry")
         .ok_or_else(|| AppError::storage("quick-entry window is unavailable"))?;
     let session_id = transient_focus::prepare_quick_entry(app, &window)?;
-    let show_result = window
-        .show()
-        .map_err(AppError::storage)
-        .and_then(|_| window.set_focus().map_err(AppError::storage))
-        .and_then(|_| {
-            window
-                .emit("todou://quick-entry-shown", QuickEntryShown { session_id })
-                .map_err(AppError::storage)
-        });
+    let show_result = transient_focus::show_quick_entry(&window).and_then(|_| {
+        window
+            .emit("todou://quick-entry-shown", QuickEntryShown { session_id })
+            .map_err(AppError::storage)
+    });
     if show_result.is_err() {
         let _ = transient_focus::dismiss_quick_entry(app, &window, Some(session_id), true);
     }
