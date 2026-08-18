@@ -1,6 +1,50 @@
 use crate::error::AppResult;
 use tauri::{AppHandle, WebviewWindow};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScreenRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn screen_with_largest_intersection(window: ScreenRect, screens: &[ScreenRect]) -> Option<usize> {
+    screens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, screen)| {
+            let width =
+                (window.x + window.width).min(screen.x + screen.width) - window.x.max(screen.x);
+            let height =
+                (window.y + window.height).min(screen.y + screen.height) - window.y.max(screen.y);
+            let area = width.max(0.0) * height.max(0.0);
+            (area > 0.0).then_some((index, area))
+        })
+        .reduce(|best, candidate| {
+            if candidate.1 > best.1 {
+                candidate
+            } else {
+                best
+            }
+        })
+        .map(|(index, _)| index)
+}
+
+fn appkit_rect_from_quartz(rect: ScreenRect, primary_top: f64) -> ScreenRect {
+    ScreenRect {
+        y: primary_top - rect.y - rect.height,
+        ..rect
+    }
+}
+
+fn centered_origin(screen: ScreenRect, window: ScreenRect) -> (f64, f64) {
+    (
+        screen.x + (screen.width - window.width) / 2.0,
+        screen.y + (screen.height - window.height) / 2.0,
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RestoreTarget<T> {
     External(T),
@@ -11,6 +55,7 @@ enum RestoreTarget<T> {
 struct QuickEntrySession<T> {
     generation: u64,
     target: Option<RestoreTarget<T>>,
+    restore_regular_activation_policy: bool,
 }
 
 #[derive(Debug)]
@@ -33,27 +78,39 @@ impl<T> Default for FocusLedger<T> {
 }
 
 impl<T: Clone> FocusLedger<T> {
-    fn begin_quick_entry(&mut self, candidate: Option<RestoreTarget<T>>) -> u64 {
+    fn begin_quick_entry(
+        &mut self,
+        candidate: Option<RestoreTarget<T>>,
+        restore_regular_activation_policy: bool,
+    ) -> u64 {
         self.next_generation = self.next_generation.wrapping_add(1).max(1);
-        let target = self
-            .quick_entry
-            .take()
-            .and_then(|session| session.target)
+        let previous = self.quick_entry.take();
+        let target = previous
+            .as_ref()
+            .and_then(|session| session.target.clone())
             .or(candidate);
+        let restore_regular_activation_policy = restore_regular_activation_policy
+            || previous.is_some_and(|session| session.restore_regular_activation_policy);
         let generation = self.next_generation;
-        self.quick_entry = Some(QuickEntrySession { generation, target });
+        self.quick_entry = Some(QuickEntrySession {
+            generation,
+            target,
+            restore_regular_activation_policy,
+        });
         generation
     }
 
     fn finish_quick_entry(
         &mut self,
         expected_generation: Option<u64>,
-    ) -> Option<Option<RestoreTarget<T>>> {
+    ) -> Option<(Option<RestoreTarget<T>>, bool)> {
         let session = self.quick_entry.as_ref()?;
         if expected_generation.is_some_and(|expected| expected != session.generation) {
             return None;
         }
-        self.quick_entry.take().map(|session| session.target)
+        self.quick_entry
+            .take()
+            .map(|session| (session.target, session.restore_regular_activation_policy))
     }
 
     fn begin_work_mode(&mut self, external: Option<T>) -> u64 {
@@ -78,18 +135,67 @@ impl<T: Clone> FocusLedger<T> {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{FocusLedger, RestoreTarget};
+    use super::{
+        appkit_rect_from_quartz, centered_origin, screen_with_largest_intersection, FocusLedger,
+        RestoreTarget, ScreenRect,
+    };
     use crate::error::{AppError, AppResult};
-    use objc2::{rc::Retained, MainThreadMarker};
+    use core_foundation::{
+        array::CFArray,
+        base::{CFType, TCFType},
+        dictionary::CFDictionary,
+        number::CFNumber,
+        string::CFString,
+    };
+    use core_graphics::{
+        geometry::CGRect,
+        window::{
+            copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer,
+            kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+            kCGWindowOwnerPID,
+        },
+    };
+    use objc2::{
+        define_class, ffi,
+        rc::Retained,
+        runtime::{AnyObject, NSObjectProtocol},
+        ClassType, MainThreadMarker, MainThreadOnly,
+    };
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationOptions, NSRunningApplication, NSScreen, NSWindow,
-        NSWindowCollectionBehavior, NSWorkspace,
+        NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSEvent,
+        NSPanel, NSRunningApplication, NSScreen, NSScreenSaverWindowLevel, NSWindow,
+        NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
     };
     use parking_lot::Mutex;
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{ptr, sync::mpsc, thread, time::Duration};
     use tauri::{AppHandle, Manager, WebviewWindow};
 
     type Application = Retained<NSRunningApplication>;
+
+    #[derive(Default)]
+    struct QuickEntryPanelIvars;
+
+    define_class!(
+        #[unsafe(super = NSPanel)]
+        #[name = "TodouQuickEntryPanel"]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = QuickEntryPanelIvars]
+        struct QuickEntryPanel;
+
+        unsafe impl NSObjectProtocol for QuickEntryPanel {}
+
+        impl QuickEntryPanel {
+            #[unsafe(method(canBecomeKeyWindow))]
+            fn can_become_key_window(&self) -> bool {
+                true
+            }
+
+            #[unsafe(method(canBecomeMainWindow))]
+            fn can_become_main_window(&self) -> bool {
+                false
+            }
+        }
+    );
 
     #[derive(Default)]
     pub struct TransientFocus {
@@ -100,26 +206,65 @@ mod platform {
         let app_for_native = app.clone();
         let window_for_native = window.clone();
         run_on_main(app, move || {
-            configure_quick_window(&window_for_native)?;
             let external = frontmost_external();
             let main_focused = app_for_native
                 .get_webview_window("main")
                 .and_then(|window| window.is_focused().ok())
                 .unwrap_or(false);
             let state = app_for_native.state::<TransientFocus>();
+            let work_mode_target = state.ledger.lock().work_mode_target.clone();
             let candidate = external
+                .clone()
                 .map(RestoreTarget::External)
                 .or_else(|| main_focused.then_some(RestoreTarget::TodouMain))
-                .or_else(|| {
-                    state
-                        .ledger
-                        .lock()
-                        .work_mode_target
-                        .clone()
-                        .map(RestoreTarget::External)
-                });
-            let generation = state.ledger.lock().begin_quick_entry(candidate);
+                .or_else(|| work_mode_target.map(RestoreTarget::External));
+            let screen = target_screen(&app_for_native, candidate.as_ref())?;
+            configure_quick_window(&window_for_native, screen)?;
+
+            let native_app = NSApplication::sharedApplication(
+                MainThreadMarker::new()
+                    .ok_or_else(|| AppError::storage("Quick Entry requires the main thread"))?,
+            );
+            let restore_regular_activation_policy =
+                matches!(candidate, Some(RestoreTarget::External(_)))
+                    && native_app.activationPolicy() == NSApplicationActivationPolicy::Regular;
+            if restore_regular_activation_policy
+                && !native_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory)
+            {
+                return Err(AppError::storage(
+                    "could not enter Quick Entry activation mode",
+                ));
+            }
+            let generation = state
+                .ledger
+                .lock()
+                .begin_quick_entry(candidate, restore_regular_activation_policy);
             Ok(generation)
+        })
+    }
+
+    pub fn show_quick_entry(window: &WebviewWindow) -> AppResult<()> {
+        let window_for_native = window.clone();
+        let app = window.app_handle().clone();
+        run_on_main(&app, move || {
+            let native_window =
+                window_for_native.ns_window().map_err(AppError::storage)? as *const NSWindow;
+            let window = unsafe { &*native_window };
+            window.orderFrontRegardless();
+            window.makeKeyWindow();
+
+            let current = NSRunningApplication::currentApplication();
+            if !current.isActive()
+                && NSApplication::sharedApplication(
+                    MainThreadMarker::new()
+                        .ok_or_else(|| AppError::storage("Quick Entry requires the main thread"))?,
+                )
+                .activationPolicy()
+                    == NSApplicationActivationPolicy::Regular
+            {
+                current.activateWithOptions(NSApplicationActivationOptions::empty());
+            }
+            Ok(())
         })
     }
 
@@ -144,11 +289,33 @@ mod platform {
             if !matches {
                 return Ok(false);
             }
-            window_for_native.hide().map_err(AppError::storage)?;
-            let Some(target) = state.ledger.lock().finish_quick_entry(expected_generation) else {
+            let native_window = match window_for_native.ns_window() {
+                Ok(window) => window as *const NSWindow,
+                Err(error) => {
+                    if let Some((target, restore_regular_activation_policy)) =
+                        state.ledger.lock().finish_quick_entry(expected_generation)
+                    {
+                        restore_regular_activation_policy_if_needed(
+                            restore_regular_activation_policy,
+                        );
+                        if restore {
+                            restore_target(&app_for_native, target);
+                        }
+                    }
+                    return Err(AppError::storage(error));
+                }
+            };
+            let window = unsafe { &*native_window };
+            let should_restore =
+                restore && (current_application_is_active() || window.isKeyWindow());
+            window.orderOut(None);
+            let Some((target, restore_regular_activation_policy)) =
+                state.ledger.lock().finish_quick_entry(expected_generation)
+            else {
                 return Ok(false);
             };
-            if restore && current_application_is_active() {
+            restore_regular_activation_policy_if_needed(restore_regular_activation_policy);
+            if should_restore {
                 restore_target(&app_for_native, target);
             }
             Ok(true)
@@ -192,24 +359,191 @@ mod platform {
         app.state::<TransientFocus>().ledger.lock().end_work_mode();
     }
 
-    fn configure_quick_window(window: &WebviewWindow) -> AppResult<()> {
+    fn configure_quick_window(window: &WebviewWindow, screen: ScreenRect) -> AppResult<()> {
         let native_window = window.ns_window().map_err(AppError::storage)? as *const NSWindow;
         let window = unsafe { &*native_window };
-        window.setCollectionBehavior(
+        let panel = convert_to_quick_panel(window)?;
+        panel.setStyleMask(panel.styleMask() | NSWindowStyleMask::NonactivatingPanel);
+        panel.setFloatingPanel(true);
+        panel.setHidesOnDeactivate(false);
+        panel.setLevel(NSScreenSaverWindowLevel);
+        panel.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::CanJoinAllApplications
                 | NSWindowCollectionBehavior::FullScreenAuxiliary
                 | NSWindowCollectionBehavior::Transient
                 | NSWindowCollectionBehavior::IgnoresCycle,
         );
-        if let Some(main_screen) = MainThreadMarker::new().and_then(NSScreen::mainScreen) {
-            let screen = main_screen.frame();
-            let frame = window.frame();
-            let mut origin = frame.origin;
-            origin.x = screen.origin.x + (screen.size.width - frame.size.width) / 2.0;
-            origin.y = screen.origin.y + (screen.size.height - frame.size.height) / 2.0;
-            window.setFrameOrigin(origin);
-        }
+        let frame = panel.frame();
+        let (x, y) = centered_origin(
+            screen,
+            ScreenRect {
+                x: frame.origin.x,
+                y: frame.origin.y,
+                width: frame.size.width,
+                height: frame.size.height,
+            },
+        );
+        let mut origin = frame.origin;
+        origin.x = x;
+        origin.y = y;
+        panel.setFrameOrigin(origin);
         Ok(())
+    }
+
+    fn convert_to_quick_panel(window: &NSWindow) -> AppResult<&QuickEntryPanel> {
+        let object = unsafe { &*(window as *const NSWindow as *const AnyObject) };
+        if ptr::eq(object.class(), QuickEntryPanel::class()) {
+            return Ok(unsafe { &*(window as *const NSWindow as *const QuickEntryPanel) });
+        }
+        if QuickEntryPanel::class().instance_size() > object.class().instance_size() {
+            return Err(AppError::storage(
+                "native Quick Entry panel is larger than Tauri's window allocation",
+            ));
+        }
+        let old_class = object.class();
+        let replaced = unsafe {
+            ffi::object_setClass(
+                window as *const NSWindow as *mut AnyObject,
+                QuickEntryPanel::class(),
+            )
+        };
+        if !ptr::eq(replaced, old_class) {
+            return Err(AppError::storage(
+                "native Quick Entry window class changed unexpectedly",
+            ));
+        }
+        Ok(unsafe { &*(window as *const NSWindow as *const QuickEntryPanel) })
+    }
+
+    fn target_screen(
+        app: &AppHandle,
+        target: Option<&RestoreTarget<Application>>,
+    ) -> AppResult<ScreenRect> {
+        let main_thread = MainThreadMarker::new()
+            .ok_or_else(|| AppError::storage("Quick Entry requires the main thread"))?;
+        let screens = NSScreen::screens(main_thread);
+        let frames = screens
+            .iter()
+            .map(|screen| {
+                let frame = screen.frame();
+                screen_rect(
+                    frame.origin.x,
+                    frame.origin.y,
+                    frame.size.width,
+                    frame.size.height,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let selected = match target {
+            Some(RestoreTarget::External(application)) => {
+                focused_window_frame(application, &frames)
+                    .and_then(|frame| screen_with_largest_intersection(frame, &frames))
+            }
+            Some(RestoreTarget::TodouMain) => app
+                .get_webview_window("main")
+                .and_then(|window| window.ns_window().ok())
+                .and_then(|window| unsafe { (&*(window as *const NSWindow)).screen() })
+                .and_then(|screen| {
+                    let frame = screen.frame();
+                    let frame = screen_rect(
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    );
+                    frames.iter().position(|candidate| *candidate == frame)
+                }),
+            None => None,
+        }
+        .or_else(|| {
+            let cursor = NSEvent::mouseLocation();
+            frames.iter().position(|screen| {
+                cursor.x >= screen.x
+                    && cursor.x < screen.x + screen.width
+                    && cursor.y >= screen.y
+                    && cursor.y < screen.y + screen.height
+            })
+        })
+        .unwrap_or(0);
+
+        screens
+            .iter()
+            .nth(selected)
+            .map(|screen| {
+                let frame = screen.visibleFrame();
+                screen_rect(
+                    frame.origin.x,
+                    frame.origin.y,
+                    frame.size.width,
+                    frame.size.height,
+                )
+            })
+            .ok_or_else(|| AppError::storage("Quick Entry monitor is unavailable"))
+    }
+
+    fn focused_window_frame(
+        application: &NSRunningApplication,
+        screens: &[ScreenRect],
+    ) -> Option<ScreenRect> {
+        let primary_top = screens.first().map(|screen| screen.y + screen.height)?;
+        let raw_windows = copy_window_info(
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )?;
+        let windows = unsafe {
+            CFArray::<CFDictionary<CFString, CFType>>::wrap_under_get_rule(
+                raw_windows.as_concrete_TypeRef(),
+            )
+        };
+        let owner_pid_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) };
+        let layer_key = unsafe { CFString::wrap_under_get_rule(kCGWindowLayer) };
+        let bounds_key = unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) };
+
+        windows.iter().find_map(|window| {
+            let owner_pid = window
+                .find(&owner_pid_key)?
+                .downcast::<CFNumber>()?
+                .to_i32()?;
+            let layer = window.find(&layer_key)?.downcast::<CFNumber>()?.to_i32()?;
+            if owner_pid != application.processIdentifier() || layer != 0 {
+                return None;
+            }
+            let bounds = window.find(&bounds_key)?.downcast::<CFDictionary>()?;
+            let bounds = CGRect::from_dict_representation(&bounds)?;
+            (bounds.size.width > 0.0 && bounds.size.height > 0.0).then(|| {
+                appkit_rect_from_quartz(
+                    ScreenRect {
+                        x: bounds.origin.x,
+                        y: bounds.origin.y,
+                        width: bounds.size.width,
+                        height: bounds.size.height,
+                    },
+                    primary_top,
+                )
+            })
+        })
+    }
+
+    fn screen_rect(x: f64, y: f64, width: f64, height: f64) -> ScreenRect {
+        ScreenRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn restore_regular_activation_policy_if_needed(restore: bool) {
+        let Some(main_thread) = MainThreadMarker::new().filter(|_| restore) else {
+            return;
+        };
+        if !NSApplication::sharedApplication(main_thread)
+            .setActivationPolicy(NSApplicationActivationPolicy::Regular)
+        {
+            tracing::warn!("could not restore the regular macOS activation policy");
+        }
     }
 
     fn restore_target(app: &AppHandle, target: Option<RestoreTarget<Application>>) {
@@ -312,7 +646,12 @@ mod platform {
             .state::<TransientFocus>()
             .ledger
             .lock()
-            .begin_quick_entry(None))
+            .begin_quick_entry(None, false))
+    }
+
+    pub fn show_quick_entry(window: &WebviewWindow) -> AppResult<()> {
+        window.show().map_err(crate::error::AppError::storage)?;
+        window.set_focus().map_err(crate::error::AppError::storage)
     }
 
     pub fn dismiss_quick_entry(
@@ -364,6 +703,10 @@ pub fn prepare_quick_entry(app: &AppHandle, window: &WebviewWindow) -> AppResult
     platform::prepare_quick_entry(app, window)
 }
 
+pub fn show_quick_entry(window: &WebviewWindow) -> AppResult<()> {
+    platform::show_quick_entry(window)
+}
+
 pub fn dismiss_quick_entry(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -387,30 +730,100 @@ pub fn end_work_mode(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{FocusLedger, RestoreTarget};
+    use super::{
+        appkit_rect_from_quartz, centered_origin, screen_with_largest_intersection, FocusLedger,
+        RestoreTarget, ScreenRect,
+    };
+
+    #[test]
+    fn focused_window_selects_the_screen_with_the_largest_overlap() {
+        let screens = [
+            ScreenRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1512.0,
+                height: 982.0,
+            },
+            ScreenRect {
+                x: 1512.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+        ];
+        let focused_window = ScreenRect {
+            x: 1400.0,
+            y: 100.0,
+            width: 1000.0,
+            height: 700.0,
+        };
+
+        assert_eq!(
+            screen_with_largest_intersection(focused_window, &screens),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn quick_entry_centers_within_a_negative_coordinate_screen() {
+        let screen = ScreenRect {
+            x: -1920.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1055.0,
+        };
+        let window = ScreenRect {
+            x: 0.0,
+            y: 0.0,
+            width: 640.0,
+            height: 230.0,
+        };
+
+        assert_eq!(centered_origin(screen, window), (-1280.0, 412.5));
+    }
+
+    #[test]
+    fn quartz_window_bounds_are_converted_to_appkit_coordinates() {
+        let quartz = ScreenRect {
+            x: 80.0,
+            y: 982.0,
+            width: 800.0,
+            height: 700.0,
+        };
+
+        assert_eq!(
+            appkit_rect_from_quartz(quartz, 982.0),
+            ScreenRect {
+                x: 80.0,
+                y: -700.0,
+                width: 800.0,
+                height: 700.0,
+            }
+        );
+    }
 
     #[test]
     fn repeated_quick_entry_preserves_original_target_and_rejects_stale_close() {
         let mut ledger = FocusLedger::default();
-        let first = ledger.begin_quick_entry(Some(RestoreTarget::External("Spotify")));
-        let second = ledger.begin_quick_entry(None);
+        let first = ledger.begin_quick_entry(Some(RestoreTarget::External("Spotify")), true);
+        let second = ledger.begin_quick_entry(None, false);
 
         assert_ne!(first, second);
         assert_eq!(ledger.finish_quick_entry(Some(first)), None);
         assert_eq!(
             ledger.finish_quick_entry(Some(second)),
-            Some(Some(RestoreTarget::External("Spotify")))
+            Some((Some(RestoreTarget::External("Spotify")), true))
         );
     }
 
     #[test]
     fn duplicate_quick_entry_close_is_idempotent() {
         let mut ledger = FocusLedger::<&str>::default();
-        let generation = ledger.begin_quick_entry(Some(RestoreTarget::TodouMain));
+        let generation = ledger.begin_quick_entry(Some(RestoreTarget::TodouMain), false);
 
         assert_eq!(
             ledger.finish_quick_entry(Some(generation)),
-            Some(Some(RestoreTarget::TodouMain))
+            Some((Some(RestoreTarget::TodouMain), false))
         );
         assert_eq!(ledger.finish_quick_entry(Some(generation)), None);
     }
@@ -418,11 +831,11 @@ mod tests {
     #[test]
     fn native_window_events_can_finish_the_current_quick_entry() {
         let mut ledger = FocusLedger::default();
-        ledger.begin_quick_entry(Some(RestoreTarget::External("Spotify")));
+        ledger.begin_quick_entry(Some(RestoreTarget::External("Spotify")), false);
 
         assert_eq!(
             ledger.finish_quick_entry(None),
-            Some(Some(RestoreTarget::External("Spotify")))
+            Some((Some(RestoreTarget::External("Spotify")), false))
         );
     }
 
@@ -431,11 +844,11 @@ mod tests {
         let mut ledger = FocusLedger::default();
         ledger.begin_work_mode(Some("Spotify"));
         let target = ledger.work_mode_target.map(RestoreTarget::External);
-        let generation = ledger.begin_quick_entry(target);
+        let generation = ledger.begin_quick_entry(target, false);
 
         assert_eq!(
             ledger.finish_quick_entry(Some(generation)),
-            Some(Some(RestoreTarget::External("Spotify")))
+            Some((Some(RestoreTarget::External("Spotify")), false))
         );
     }
 

@@ -22,6 +22,7 @@
 - Manual dedupe scans wait behind automatic drains, enqueue only missing active-task jobs, and replace stale suggestions for the same task pair.
 - Tauri commands may be bare values or `Revisioned<T>` during internal refactors; the frontend compatibility unwrapping currently accepts both. The Unix socket always returns `{id, ok, result, revision}`.
 - On macOS, keep the main and Work Mode windows' `dragDropEnabled` false so WKWebView receives Todou's HTML5 task-drag events.
+- On macOS, Quick Entry captures the external window's display before activation and uses a nonactivating panel; its focus ledger must restore any temporary Accessory activation policy.
 - Work Mode uses the hidden `work-mode` webview plus device-local `work_mode_state_v2` metadata. Rust owns active-state persistence and window/focus integration, including geometry in logical macOS points.
 - Work Mode shows all active In Progress tasks in canonical order, up to the three-task limit. Creating or moving a task into In Progress appends it to that order; priority changes never move it.
 

@@ -34,8 +34,10 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
 uuid = { version = "=1.24.0", features = ["serde", "v4"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "=0.10.1"
+core-graphics = "=0.25.0"
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSApplication", "NSEvent", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["libc", "NSApplication", "NSEvent", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"
