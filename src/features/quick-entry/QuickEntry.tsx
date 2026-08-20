@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from "react";
 import {
   CalendarDays,
   Check,
@@ -15,7 +22,13 @@ import { localDateString, scheduledNewTaskBucket } from "../../lib/newTaskSchedu
 import { loadPreferences, savePreferences } from "../../lib/preferences";
 import { isTauriRuntime, taskClient } from "../../lib/taskClient";
 import { applyTheme } from "../../lib/themes";
-import type { Area, Bucket, Priority, ThemeId } from "../../lib/types";
+import {
+  taskDescriptionMaxLength,
+  type Area,
+  type Bucket,
+  type Priority,
+  type ThemeId,
+} from "../../lib/types";
 
 const tokenIcons = {
   date: CalendarDays,
@@ -25,6 +38,57 @@ const tokenIcons = {
   bucket: Inbox,
 };
 
+const pastedUrlPattern = /https?:\/\/[^\s<>"']+/gi;
+
+function trimTrailingUrlPunctuation(value: string): string {
+  let candidate = value.replace(/[.,;:!?]+$/, "");
+  for (const [opening, closing] of [["(", ")"], ["[", "]"], ["{", "}"]] as const) {
+    while (
+      candidate.endsWith(closing)
+      && candidate.split(closing).length > candidate.split(opening).length
+    ) {
+      candidate = candidate.slice(0, -1);
+    }
+  }
+  return candidate;
+}
+
+function extractPastedUrls(input: string): { text: string; urls: string[]; fallbackTitle: string } {
+  const urls: string[] = [];
+  const ranges: Array<{ start: number; end: number }> = [];
+  const matches = [...input.matchAll(pastedUrlPattern)];
+  let cursor = 0;
+  const containsOnlyUrls = matches.length > 0 && matches.every((match) => {
+    const separator = input.slice(cursor, match.index);
+    cursor = (match.index ?? 0) + match[0].length;
+    return !separator.trim();
+  }) && !input.slice(cursor).trim();
+
+  for (const match of matches) {
+    const candidate = containsOnlyUrls ? match[0] : trimTrailingUrlPunctuation(match[0]);
+    try {
+      const url = new URL(candidate);
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+      urls.push(candidate);
+      ranges.push({ start: match.index ?? 0, end: (match.index ?? 0) + candidate.length });
+    } catch {
+      continue;
+    }
+  }
+
+  const firstUrl = urls[0];
+  if (!firstUrl) return { text: input, urls, fallbackTitle: "" };
+
+  cursor = 0;
+  const textSegments: string[] = [];
+  for (const { start, end } of ranges) {
+    textSegments.push(input.slice(cursor, start));
+    cursor = end;
+  }
+  textSegments.push(input.slice(cursor));
+  return { text: textSegments.join(""), urls, fallbackTitle: new URL(firstUrl).hostname };
+}
+
 export function QuickEntry() {
   const preferences = useRef(loadPreferences());
   const [value, setValue] = useState("");
@@ -32,8 +96,11 @@ export function QuickEntry() {
   const [area, setArea] = useState<Area>(preferences.current.lastArea);
   const [bucket, setBucket] = useState<Bucket>("inbox");
   const [dueDate, setDueDate] = useState<string | null>(null);
+  const [descriptionLinks, setDescriptionLinks] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [pendingCreatedTaskId, setPendingCreatedTaskId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sessionIdRef = useRef<number | null>(null);
   const parsed = useMemo(() => parseNaturalLanguage(value), [value]);
@@ -41,6 +108,7 @@ export function QuickEntry() {
   const finalArea = parsed.fields.area ?? area;
   const finalDueDate = parsed.fields.dueDate ?? dueDate;
   const finalBucket = scheduledNewTaskBucket(parsed.fields.bucket ?? bucket, finalDueDate);
+  const descriptionRetryPending = pendingCreatedTaskId !== null;
 
   const toggleToday = () => {
     const moveToToday = finalBucket === "inbox";
@@ -63,8 +131,11 @@ export function QuickEntry() {
         setArea(preferences.current.lastArea);
         setBucket("inbox");
         setDueDate(null);
+        setDescriptionLinks([]);
         setSaving(false);
         setSaved(false);
+        setSaveError(null);
+        setPendingCreatedTaskId(null);
         window.requestAnimationFrame(() => inputRef.current?.focus());
       });
       const unlistenTheme = await listen<{ themeId: ThemeId }>("todou://theme-preview", (event) => {
@@ -89,34 +160,55 @@ export function QuickEntry() {
     setPriority("low");
     setBucket("inbox");
     setDueDate(null);
+    setDescriptionLinks([]);
     setSaved(false);
+    setSaveError(null);
+    setPendingCreatedTaskId(null);
     if (isTauriRuntime()) await taskClient.hideCurrentWindow(expectedSessionId);
   };
 
   const save = async () => {
     if (!parsed.title.trim() || saving) return;
+    const originatingSessionId = sessionIdRef.current;
+    const isCurrentSession = () => originatingSessionId === sessionIdRef.current;
+    const description = descriptionLinks.join("\n");
+    if (Array.from(description).length > taskDescriptionMaxLength) {
+      setSaveError("Too many links");
+      return;
+    }
     setSaving(true);
+    setSaveError(null);
     try {
-      await taskClient.createTask({
-        title: parsed.title,
-        bucket: finalBucket,
-        priority: finalPriority,
-        area: finalArea,
-        dueDate: finalDueDate,
-        estimateMinutes: parsed.fields.estimateMinutes ?? null,
-      });
+      let taskId = pendingCreatedTaskId;
+      if (!taskId) {
+        const created = await taskClient.createTask({
+          title: parsed.title,
+          bucket: finalBucket,
+          priority: finalPriority,
+          area: finalArea,
+          dueDate: finalDueDate,
+          estimateMinutes: parsed.fields.estimateMinutes ?? null,
+        });
+        taskId = created.id;
+        if (description && isCurrentSession()) setPendingCreatedTaskId(taskId);
+      }
+      if (description) await taskClient.updateTask(taskId, { description });
+      if (!isCurrentSession()) return;
+      setPendingCreatedTaskId(null);
       preferences.current = { ...preferences.current, lastArea: finalArea };
       savePreferences(preferences.current);
+      setDescriptionLinks([]);
       setSaved(true);
       if (isTauriRuntime()) {
-        const savedSessionId = sessionIdRef.current;
-        window.setTimeout(() => void close(savedSessionId), 120);
+        window.setTimeout(() => void close(originatingSessionId), 120);
       } else {
         setValue("");
         window.setTimeout(() => setSaved(false), 1_500);
       }
+    } catch {
+      if (isCurrentSession()) setSaveError("Couldn’t save");
     } finally {
-      setSaving(false);
+      if (isCurrentSession()) setSaving(false);
     }
   };
 
@@ -129,6 +221,25 @@ export function QuickEntry() {
       event.preventDefault();
       void save();
     }
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    const input = event.currentTarget;
+    const start = input.selectionStart ?? value.length;
+    const end = input.selectionEnd ?? start;
+    const pasted = extractPastedUrls(event.clipboardData.getData("text/plain"));
+    let nextValue = `${value.slice(0, start)}${pasted.text}${value.slice(end)}`;
+    if (pasted.urls.length) {
+      nextValue = nextValue
+        .replace(/\s+/g, " ")
+        .replace(/\s+([,.;:!?])/g, "$1")
+        .trim() || pasted.fallbackTitle;
+    }
+    setValue(nextValue);
+    if (pasted.urls.length) setDescriptionLinks((links) => [...links, ...pasted.urls]);
+    setSaved(false);
+    setSaveError(null);
   };
 
   return (
@@ -148,12 +259,15 @@ export function QuickEntry() {
           <input
             ref={inputRef}
             value={value}
-            onChange={(event) => { setValue(event.target.value); setSaved(false); }}
+            disabled={descriptionRetryPending}
+            onChange={(event) => { setValue(event.target.value); setSaved(false); setSaveError(null); }}
+            onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             placeholder="What needs to happen?"
             aria-label="New task"
           />
           {saved && <span className="quick-saved" role="status"><Check size={14} />Saved</span>}
+          {saveError && <span className="quick-saved" role="alert">{saveError}</span>}
         </div>
 
         <div className="quick-preview">
@@ -167,10 +281,10 @@ export function QuickEntry() {
 
         <footer className="quick-footer">
           <div className="quick-options" role="group" aria-label="Task details">
-            <button className={finalPriority === "high" ? "is-active priority" : ""} onClick={() => setPriority(finalPriority === "high" ? "low" : "high")} title="Toggle priority" aria-label="High priority" aria-pressed={finalPriority === "high"}><Flag size={14} fill={finalPriority === "high" ? "currentColor" : "none"} />{finalPriority === "high" ? "High" : "Low"}</button>
-            <button className={`is-active-${finalArea}`} onClick={() => setArea(finalArea === "work" ? "personal" : "work")} title={`Set area to ${finalArea === "work" ? "personal" : "work"}`} aria-label="Work task" aria-pressed={finalArea === "work"}><UserRound size={14} />{finalArea === "work" ? "Work" : "Personal"}</button>
-            <button onClick={toggleToday} title={`Move to ${finalBucket === "inbox" ? "Today" : "Inbox"}`} aria-label="Today list" aria-pressed={finalBucket === "today"}>{finalBucket === "inbox" ? <Inbox size={14} /> : <CornerDownLeft size={14} />}{finalBucket === "inbox" ? "Inbox" : "Today"}</button>
-            <label className={finalDueDate ? "has-value" : ""} title="Due date"><CalendarDays size={14} /><input type="date" value={finalDueDate ?? ""} onChange={(event) => setDueDate(event.target.value || null)} aria-label="Due date" /></label>
+            <button disabled={descriptionRetryPending} className={finalPriority === "high" ? "is-active priority" : ""} onClick={() => setPriority(finalPriority === "high" ? "low" : "high")} title="Toggle priority" aria-label="High priority" aria-pressed={finalPriority === "high"}><Flag size={14} fill={finalPriority === "high" ? "currentColor" : "none"} />{finalPriority === "high" ? "High" : "Low"}</button>
+            <button disabled={descriptionRetryPending} className={`is-active-${finalArea}`} onClick={() => setArea(finalArea === "work" ? "personal" : "work")} title={`Set area to ${finalArea === "work" ? "personal" : "work"}`} aria-label="Work task" aria-pressed={finalArea === "work"}><UserRound size={14} />{finalArea === "work" ? "Work" : "Personal"}</button>
+            <button disabled={descriptionRetryPending} onClick={toggleToday} title={`Move to ${finalBucket === "inbox" ? "Today" : "Inbox"}`} aria-label="Today list" aria-pressed={finalBucket === "today"}>{finalBucket === "inbox" ? <Inbox size={14} /> : <CornerDownLeft size={14} />}{finalBucket === "inbox" ? "Inbox" : "Today"}</button>
+            <label className={finalDueDate ? "has-value" : ""} title="Due date"><CalendarDays size={14} /><input disabled={descriptionRetryPending} type="date" value={finalDueDate ?? ""} onChange={(event) => setDueDate(event.target.value || null)} aria-label="Due date" /></label>
           </div>
           <button
             className="quick-save"
