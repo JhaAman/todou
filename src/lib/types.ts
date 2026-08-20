@@ -55,6 +55,7 @@ export type ShortcutAction =
   | "commandPalette"
   | "search"
   | "complete"
+  | "moveInProgress"
   | "moveToday"
   | "moveInbox"
   | "togglePriority"

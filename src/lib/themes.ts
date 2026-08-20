@@ -127,6 +127,8 @@ function areaTokens(seed: string, surfaces: string[], text: string): { mark: str
   return { mark, foreground: ensureContrastAcross(chipSurfaces, mark, text, 4.5) };
 }
 
+const minimumAreaMarkDistance = 64;
+
 // Some palettes reuse one hue for accent and info, which would make the two area rails indistinguishable.
 function resolvePersonalArea(
   palette: OpenCodeThemePalette,
@@ -137,7 +139,7 @@ function resolvePersonalArea(
   const candidates = [palette.accent ?? palette.primary, palette.warning, palette.error];
   const resolved = candidates.map((seed) => areaTokens(seed, surfaces, text));
   return (
-    resolved.find((tokens) => srgbDistance(tokens.mark, workMark) >= 40)
+    resolved.find((tokens) => srgbDistance(tokens.mark, workMark) >= minimumAreaMarkDistance)
       ?? resolved.reduce((best, tokens) =>
         srgbDistance(tokens.mark, workMark) > srgbDistance(best.mark, workMark) ? tokens : best,
       )

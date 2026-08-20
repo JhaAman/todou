@@ -11,6 +11,7 @@ import {
   Keyboard,
   ListTodo,
   Palette,
+  Play,
   Plus,
   RotateCcw,
   Search,
@@ -91,6 +92,7 @@ export function CommandPalette(props: CommandPaletteProps) {
         ? { id: "restore", label: "Restore selected task", detail: "Move it out of Logbook", icon: <RotateCcw />, shortcut: props.shortcuts.complete, run: () => closeAnd(props.onRestoreSelected) }
         : { id: "complete", label: "Complete selected task", detail: "Move it to Logbook", icon: <CheckCircle2 />, shortcut: props.shortcuts.complete, run: () => closeAnd(props.onCompleteSelected) },
       ...(!props.selectedTask.completedAt ? [
+        ...(props.selectedTask.bucket !== "in_progress" ? [{ id: "move-in-progress", label: "Move selected task to In Progress", detail: "Start working on it now", icon: <Play />, shortcut: props.shortcuts.moveInProgress, run: () => closeAnd(() => props.onMoveSelected("in_progress")) }] : []),
         { id: "move-today", label: "Move selected task to Today", detail: "Make it part of today's list", icon: <CalendarDays />, shortcut: props.shortcuts.moveToday, run: () => closeAnd(() => props.onMoveSelected("today")) },
         { id: "move-inbox", label: "Move selected task to Inbox", detail: "Clears its due date", icon: <Inbox />, shortcut: props.shortcuts.moveInbox, run: () => closeAnd(() => props.onMoveSelected("inbox")) },
       ] : []),

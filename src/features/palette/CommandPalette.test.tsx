@@ -150,6 +150,12 @@ describe("command palette", () => {
     expect(onShortcutChange).toHaveBeenCalledWith("quickEntry", "Ctrl+Shift+Space");
   });
 
+  it("lists the In Progress shortcut with the other editable shortcuts", () => {
+    renderPalette("shortcuts");
+
+    expect(screen.getByRole("option", { name: /Move to In Progress/i })).toHaveTextContent("⌘⇧G");
+  });
+
   it("rejects a shortcut collision regardless of modifier order", () => {
     const onShortcutChange = vi.fn();
     renderPalette("shortcuts", { onShortcutChange });
