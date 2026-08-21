@@ -202,7 +202,7 @@ describe("themes", () => {
       }
       const workMark = document.documentElement.style.getPropertyValue("--area-work-mark");
       const personalMark = document.documentElement.style.getPropertyValue("--area-personal-mark");
-      expect(srgbDistance(workMark, personalMark), `${theme.id} area mark distinctness`).toBeGreaterThanOrEqual(40);
+      expect(srgbDistance(workMark, personalMark), `${theme.id} area mark distinctness`).toBeGreaterThanOrEqual(64);
       for (const focusBackground of focusBackgrounds) {
         expect(contrastRatio(focusBackground, document.documentElement.style.getPropertyValue("--focus-ring")), `${theme.id} focus ring`).toBeGreaterThanOrEqual(3);
       }

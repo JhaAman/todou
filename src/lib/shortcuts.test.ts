@@ -10,6 +10,11 @@ describe("shortcut matching", () => {
     expect(defaultShortcuts.quickEntry).toBe("Ctrl+Shift+Space");
   });
 
+  it("gives In Progress a unique default shortcut", () => {
+    expect(defaultShortcuts.moveInProgress).toBe("Meta+Shift+G");
+    expect(new Set(Object.values(defaultShortcuts))).toHaveLength(Object.keys(defaultShortcuts).length);
+  });
+
   it("matches defaults regardless of the stored modifier order", () => {
     expect(shortcutMatches(
       keyboardEvent("T", { metaKey: true, shiftKey: true }),

@@ -971,6 +971,8 @@ kbd {
 .detail-input-row input:focus { border-color: var(--border); background: var(--surface-raised); }
 .detail-input-row .date-input {
   width: 136px;
+  flex: none;
+  margin-inline-start: auto;
   padding: 0 5px 0 9px;
   color: var(--text-strong);
   font-variant-numeric: tabular-nums;

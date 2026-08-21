@@ -50,7 +50,7 @@ function formatHeaderDate(): string {
 
 const shortcutWarningKey = "todou.quick-entry-shortcut-warning.v1";
 const inProgressTaskLimit = 3;
-type TaskShortcutAction = Extract<ShortcutAction, "complete" | "moveToday" | "moveInbox" | "togglePriority" | "toggleArea" | "delete">;
+type TaskShortcutAction = Extract<ShortcutAction, "complete" | "moveInProgress" | "moveToday" | "moveInbox" | "togglePriority" | "toggleArea" | "delete">;
 type ShortcutTip = { action: TaskShortcutAction; label: string };
 const emptyLlmSettings: LlmSettingsStatus = {
   openai: { configured: false, source: null },
@@ -550,10 +550,16 @@ export default function App() {
   const moveTask = useCallback((id: string, bucket: Bucket) => {
     const task = controller.tasks.find((candidate) => candidate.id === id);
     if (!task || task.bucket === bucket) return;
-    void controller.moveTask(id, bucket);
+    if (bucket === "in_progress" && inProgressTasks.length >= inProgressTaskLimit) {
+      showNotice("In Progress is full — finish or move a task first");
+      return;
+    }
+    const result = controller.moveTask(id, bucket);
+    if (bucket === "in_progress") showShortcutTip("moveInProgress");
     if (bucket === "today") showShortcutTip("moveToday");
     if (bucket === "inbox") showShortcutTip("moveInbox");
-  }, [controller.moveTask, controller.tasks, showShortcutTip]);
+    return result;
+  }, [controller.moveTask, controller.tasks, inProgressTasks.length, showNotice, showShortcutTip]);
 
   const deleteTask = useCallback((id: string) => {
     void controller.deleteTask(id);
@@ -623,18 +629,21 @@ export default function App() {
     const sourceTasks = tasksForBucket(controller.tasks, task.bucket);
     const sourceIndex = sourceTasks.findIndex(({ id }) => id === task.id);
     if (sourceIndex < 0) {
-      void controller.moveTask(task.id, bucket);
+      void moveTask(task.id, bucket);
       return;
     }
     const neighborId = sourceTasks[sourceIndex + 1]?.id ?? sourceTasks[sourceIndex - 1]?.id ?? null;
 
+    const result = moveTask(task.id, bucket);
+    if (!result) return;
+
     const selectionVersion = selectionVersionRef.current + 1;
     selectionVersionRef.current = selectionVersion;
     setSelectedTaskId(neighborId);
-    void controller.moveTask(task.id, bucket).catch(() => {
+    void result.catch(() => {
       if (selectionVersionRef.current === selectionVersion) selectTask(task.id);
     });
-  }, [controller.moveTask, controller.tasks, selectTask]);
+  }, [controller.tasks, moveTask, selectTask]);
 
   const visibleTasks = useMemo(() => {
     if (view === "today") return todayTasks;
@@ -693,6 +702,11 @@ export default function App() {
         if (shortcutMatches(event, preferences.shortcuts.moveToday)) {
           event.preventDefault();
           moveTaskAndSelectSourceNeighbor(selectedTask, "today");
+          return;
+        }
+        if (shortcutMatches(event, preferences.shortcuts.moveInProgress)) {
+          event.preventDefault();
+          moveTaskAndSelectSourceNeighbor(selectedTask, "in_progress");
           return;
         }
         if (shortcutMatches(event, preferences.shortcuts.moveInbox)) {

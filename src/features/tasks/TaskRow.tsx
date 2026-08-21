@@ -8,6 +8,7 @@ import {
   Flag,
   GripVertical,
   Inbox,
+  Play,
   RotateCcw,
   Trash2,
   UserRound,
@@ -214,6 +215,15 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
             >
               <Flag size={14} fill={task.priority === "high" ? "currentColor" : "none"} />
             </button>
+            {task.bucket !== "in_progress" && (
+              <button
+                title="Move to In Progress"
+                aria-label={`Move ${task.title} to In Progress`}
+                onClick={(event) => stop(event, () => onMove("in_progress"))}
+              >
+                <Play size={14} fill="currentColor" />
+              </button>
+            )}
             <button
               title={`Move to ${task.bucket === "today" ? "Inbox" : "Today"}`}
               aria-label={`Move ${task.title} to ${task.bucket === "today" ? "Inbox" : "Today"}`}
@@ -247,6 +257,13 @@ export function TaskRow({ task, selected, semanticRole = "option", onSelect, onC
               <Check size={16} />
               <span>Mark complete</span>
               <KeyHint shortcut={shortcuts.complete} />
+            </button>
+          )}
+          {!task.completedAt && task.bucket !== "in_progress" && (
+            <button role="menuitem" onClick={(event) => runMenuAction(event, () => onMove("in_progress"))}>
+              <Play size={16} fill="currentColor" />
+              <span>Move to In Progress</span>
+              <KeyHint shortcut={shortcuts.moveInProgress} />
             </button>
           )}
           {!task.completedAt && task.bucket !== "today" && (

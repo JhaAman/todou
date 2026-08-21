@@ -88,10 +88,16 @@ describe("task context menu", () => {
     fireEvent.contextMenu(screen.getByRole("option", { name: /Plan the release/i }), { clientX: 100, clientY: 200 });
 
     const menu = screen.getByRole("menu");
+    const moveToInProgress = screen.getByRole("menuitem", { name: /Move to In Progress/i });
     const moveToInbox = screen.getByRole("menuitem", { name: /Move to Inbox/i });
     expect(menu).toBeVisible();
+    expect(moveToInProgress).toHaveTextContent("⌘⇧G");
     expect(moveToInbox).toHaveTextContent("⌃⇧I");
     expect(screen.getByRole("menuitem", { name: /Mark complete/i })).toHaveFocus();
+
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+
+    expect(moveToInProgress).toHaveFocus();
 
     fireEvent.keyDown(menu, { key: "ArrowDown" });
 

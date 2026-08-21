@@ -293,8 +293,52 @@ describe("task drag and drop", () => {
   });
 });
 
-describe("task move keyboard shortcuts", () => {
+describe("task move controls", () => {
   beforeEach(() => localStorage.clear());
+
+  it.each([
+    {
+      name: "keyboard shortcut",
+      move: () => fireEvent.keyDown(document.body, { key: "g", metaKey: true, shiftKey: true }),
+    },
+    {
+      name: "command palette",
+      move: async () => {
+        fireEvent.keyDown(document.body, { key: "k", metaKey: true });
+        fireEvent.click(await screen.findByRole("option", { name: /Move selected task to In Progress/i }));
+      },
+    },
+    {
+      name: "task item action",
+      move: () => fireEvent.click(screen.getByRole("button", { name: "Move Start this to In Progress" })),
+    },
+  ])("moves a task to In Progress through the $name", async ({ move }) => {
+    await renderApp([
+      task({ id: "active", title: "Already active", bucket: "in_progress", orderKey: "000001" }),
+      task({ id: "start-this", title: "Start this", bucket: "inbox", orderKey: "000002" }),
+    ]);
+    fireEvent.click(taskRow("Start this"));
+
+    await move();
+
+    await waitFor(() => expect(storedTask("start-this")).toMatchObject({ bucket: "in_progress" }));
+  });
+
+  it("keeps the selected task in place when In Progress is full", async () => {
+    await renderApp([
+      task({ id: "active-1", title: "Active one", bucket: "in_progress", orderKey: "000001" }),
+      task({ id: "active-2", title: "Active two", bucket: "in_progress", orderKey: "000002" }),
+      task({ id: "active-3", title: "Active three", bucket: "in_progress", orderKey: "000003" }),
+      task({ id: "blocked", title: "Blocked start", bucket: "inbox", orderKey: "000004" }),
+    ]);
+    fireEvent.click(taskRow("Blocked start"));
+
+    fireEvent.keyDown(document.body, { key: "g", metaKey: true, shiftKey: true });
+
+    expect(await screen.findByText("In Progress is full — finish or move a task first")).toBeInTheDocument();
+    expect(storedTask("blocked")).toMatchObject({ bucket: "inbox" });
+    expect(taskRow("Blocked start")).toHaveAttribute("aria-current", "true");
+  });
 
   it("selects the following Inbox task after moving the selected task to Today", async () => {
     await renderApp([
